@@ -745,6 +745,16 @@ static int run_shook(int start_pid, int pid_attach,
 	return 0;
 }
 
+static int openlog(const char *file)
+{
+	int fd = open(file, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
+			S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+	if (fd < 0) {
+		fprintf(stderr, "Failed open log file \"%s\", errno=%d\n", file, errno);
+		exit(1);
+	}
+	return fd;
+}
 
 static void usage()
 {
@@ -767,11 +777,11 @@ int main(int argc, char **argv)
 	int script_argc = 0;
 	char **script_argv = nullptr;
 
-	const char *output = "shook.out";
+	const char *output = nullptr;
 	int pid_attach = -1;
 	bool background = false;
 	bool dosleep = false;
-	while (*argv) {
+	for ( ; *argv; ++argv) {
 		if (false) {
 			/* placeholder */
 		} else if (strcmp(*argv, "-x") == 0) {
@@ -806,12 +816,21 @@ int main(int argc, char **argv)
 		} else {
 			break;
 		}
-		++argv;
 	}
 
 	if (!*argv && pid_attach == -1) {
 		usage();
 	}
+
+	int logfd = 2;
+	if (output) {
+		logfd = openlog(output);
+		if (logfd < 0) {
+			fprintf(stderr, "Failed open log file \"%s\", errno=%d\n", output, errno);
+			exit(1);
+		}
+	}
+	gstate.logfd = logfd;
 
 	int this_pid = getpid();
 	if (background) {
@@ -833,20 +852,15 @@ int main(int argc, char **argv)
 				sleep(3);
 			}
 
-			int fd = open(output, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-			if (fd < 0) {
-				fprintf(stderr, "Failed open log file \"%s\", errno=%d\n", output, errno);
-				exit(1);
-			}
-
 			setsid();
 			close(0);
-			close(1);
-			close(2);
 			open("/dev/null", O_RDWR);
+			close(1);
 			dup(0);
-			dup(fd);
-			close(fd);
+			if (logfd != 2) {
+				close(2);
+				dup(0);
+			}
 
 			pid = getpid();
 			write(sockets[0], &pid, sizeof(pid));
@@ -896,12 +910,6 @@ int main(int argc, char **argv)
 				FATAL("%s", strerror(errno));
 			}
 		}
-		int fd = open(output, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-		if (fd < 0) {
-			fprintf(stderr, "Failed open log file \"%s\", errno=%d\n", output, errno);
-			exit(1);
-		}
-		gstate.logfd = fd;
 		return run_shook(start_pid, pid_attach, script_argc, script_argv);
 	}
 }
