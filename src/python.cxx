@@ -26,13 +26,12 @@
 
 
 struct syscall_ent_t {
-	const char * const name;
 	PyObject *po_value;
 	PyObject *po_name;
 };
 
 static syscall_ent_t g_syscall_ent[] = {
-#define X(s, argc, r, p) { #s, NULL, PyString_FromString(#s) },
+#define X(s, argc, r, p) { NULL, PyString_FromString(#s) },
 #include "syscallent.h"
 #undef X
 };
@@ -446,6 +445,12 @@ PyObject *pyobj_from_native(const struct timeval &t)
 }
 
 template <>
+bool pyobj_to_native(struct timeval &t, PyObject *po)
+{
+	return PyArg_ParseTuple(po, "Ii", &t.tv_sec, &t.tv_usec);
+}
+
+template <>
 PyObject *pyobj_from_native(const struct timespec &t)
 {
 	PyObject *po_tuple = PyTuple_New(2);
@@ -847,14 +852,16 @@ static PyMethodDef pymod_methods[] = {
 		"Get signal name" },
 	{ "peek_path", shook_py_peek_path, METH_VARARGS,
 		"Read string from tracee" },
-	{ "peek_timezone", shook_py_peek<struct timezone>, METH_VARARGS,
+	{ "peek_timezone", shook_py_peek_array<struct timezone>, METH_VARARGS,
 		"Read sockaddr from tracee" },
-	{ "peek_timeval", shook_py_peek<struct timeval>, METH_VARARGS,
-		"Read sockaddr from tracee" },
+	{ "peek_timeval", shook_py_peek_array<struct timeval>, METH_VARARGS,
+		"Read timeval array from tracee" },
+	{ "poke_timeval", shook_py_poke_array<struct timeval>, METH_VARARGS,
+		"Write timeval array to tracee" },
 	{ "peek_timespec", shook_py_peek_array<struct timespec>, METH_VARARGS,
-		"Read sockaddr from tracee" },
+		"Read timespec array from tracee" },
 	{ "poke_timespec", shook_py_poke_array<struct timespec>, METH_VARARGS,
-		"Read sockaddr from tracee" },
+		"Write timespec array to tracee" },
 	{ "peek_sockaddr", shook_py_peek_sockaddr, METH_VARARGS,
 		"Read sockaddr from tracee" },
 	{ "poke_sockaddr", shook_py_poke_sockaddr, METH_VARARGS,
@@ -960,7 +967,7 @@ int py_init(const char *pymod_name,
 
 	for (size_t i = 0; i < sizeof(g_syscall_ent) / sizeof(g_syscall_ent[0]); ++i) {
 		char symbol[80];
-		snprintf(symbol, sizeof symbol, "SYS_%s", g_syscall_ent[i].name);
+		snprintf(symbol, sizeof symbol, "SYS_%s", g_syscall_name[i]);
 		PyObject *po = PyInt_FromLong(i);
 		assert(po);
 		g_syscall_ent[i].po_value = po;

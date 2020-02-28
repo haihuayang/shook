@@ -9,6 +9,7 @@
 extern "C" {
 #endif
 
+unsigned long get_pagesize(void);
 ssize_t vm_poke_mem(pid_t pid, const void *laddr, long raddr, size_t len);
 ssize_t vm_peek_mem(pid_t pid, void *laddr, long raddr, size_t len);
 ssize_t vm_poke_memv(pid_t pid, const void *laddr, size_t llen, const struct iovec *riov, size_t riovcnt);

@@ -9,8 +9,7 @@
 #include <assert.h>
 #include <algorithm>
 
-unsigned long
-get_pagesize(void)
+unsigned long get_pagesize(void)
 {
         static unsigned long pagesize;
 

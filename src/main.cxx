@@ -21,33 +21,12 @@
 #include "timerq.h"
 #include "utils.h"
 
-#include <elf.h>
-
 static unsigned int g_syscall_argc[] = {
 #define X(s, argc, r, p) argc,
 #include "syscallent.h"
 #undef X
 };
 
-
-enum {
-	LOG_FATAL,
-	LOG_ERROR,
-	LOG_WARN,
-	LOG_INFO,
-	LOG_DEBUG,
-	LOG_VERB,
-	LOG_MAX,
-};
-
-static const char * const level_name[] = {
-	"Fatal",
-	"Error",
-	"Warn",
-	"Info",
-	"Debug",
-	"Verb",
-};
 
 static const char * const action_name[] = {
 #define SHOOK_ACTION_DECL(x) #x,
@@ -103,9 +82,7 @@ struct gstate_t
 	ya_timerq_t timerq;
 	ya_tick_t now;
 	int signalfd = -1;
-	int logfd = 2;
-	unsigned int loglevel = LOG_INFO;
-	bool disable_vdso = false;
+	bool enable_vdso = false;
 
 	unw_addr_space_t unw_addr_space;
 };
@@ -114,23 +91,16 @@ static gstate_t gstate;
 static bool abort_on_python_exception = false;
 
 #if 0
-#define OUTPUT_LOG(...) do { \
-	fprintf(g_logfp, __VA_ARGS__); \
-} while (0)
-#else
-#define OUTPUT_LOG(...) do { \
-	char __buf[1024]; \
-	int __len = snprintf(__buf, sizeof __buf, __VA_ARGS__); \
-	write(gstate.logfd, __buf, __len); \
-} while (0)
-#endif
-
-#define FATAL(...) do { \
-	OUTPUT_LOG("FATAL at %d, errno %d: ", __LINE__, errno); \
-	OUTPUT_LOG(__VA_ARGS__); \
-	OUTPUT_LOG("\n"); \
-	exit(EXIT_FAILURE); \
-} while (0)
+static int openlog(const char *file)
+{
+	int fd = open(file, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
+			S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+	if (fd < 0) {
+		fprintf(stderr, "Failed open log file \"%s\", errno=%d\n", file, errno);
+		exit(1);
+	}
+	return fd;
+}
 
 static void dolog(int level, const char *fmt, ...) __attribute__((format (printf, 2, 3)));
 static void dolog(int level, const char *fmt, ...)
@@ -146,7 +116,7 @@ static void dolog(int level, const char *fmt, ...)
 		goto truncated;
 	}
 	p += l;
-	l = snprintf(p, end - p, ":%03d %s ", (unsigned int)tv_now.tv_usec / 1000, level_name[level]);
+	l = snprintf(p, end - p, ":%06d %s ", (unsigned int)tv_now.tv_usec, level_name[level]);
 	if (p + l >= end) {
 		goto truncated;
 	}
@@ -172,16 +142,7 @@ truncated:
 	*p++ = '>';
 	goto output;
 }
-
-#define LOG(level, ...) do { \
-	if (level <= gstate.loglevel) { \
-		dolog(level, __VA_ARGS__); \
-	} \
-} while (0)
-
-#define DBG(fmt, ...) LOG(LOG_DEBUG, "at %s:%d " fmt, __FILE__, __LINE__, __VA_ARGS__)
-#define VERB(fmt, ...) LOG(LOG_VERB, "at %s:%d " fmt, __FILE__, __LINE__, __VA_ARGS__)
-
+#endif
 static void detached(tcb_t &tcb)
 {
 	shook_py_emit_process(abort_on_python_exception, tcb.pid, SHOOK_PROCESS_DETACHED, 0);
@@ -247,7 +208,7 @@ static void gdb(pid_t pid)
 	char str_pid[16];
 	snprintf(str_pid, sizeof(str_pid), "%d", pid);
 	int err = ptrace(PTRACE_DETACH, pid, (char *)1, SIGSTOP);
-	fprintf(stderr, "PTRACE_DETACH %d = %d, %d\n", pid, err, errno);
+	LOG(LOG_INFO, "PTRACE_DETACH %d = %d, %d\n", pid, err, errno);
 	unsetenv("PYTHONHOME");
 
         sigset_t mask;
@@ -255,7 +216,7 @@ static void gdb(pid_t pid)
         sigemptyset(&mask);
 	err = sigprocmask(SIG_SETMASK, &mask, NULL);
 	if (err < 0) {
-		fprintf(stderr, "sigprocmask errno=%d\n", errno);
+		LOG(LOG_ERROR, "sigprocmask errno=%d\n", errno);
 	}
 
 	const char *gdbpath = getenv("GDB");
@@ -263,7 +224,7 @@ static void gdb(pid_t pid)
 		gdbpath = "gdb";
 	}
 	execlp(gdbpath, "gdb", "-p", str_pid, NULL);
-	fprintf(stderr, "Never be here\n");
+	LOG(LOG_ERROR, "Never be here\n");
 	assert(0);
 }
 
@@ -327,7 +288,7 @@ static void emit_enter_signal(pid_t pid, tcb_t &tcb)
 {
 	int action = shook_py_emit_enter_signal(abort_on_python_exception, pid, tcb.context);
 	if (action == SHOOK_ACTION_SUSPEND) {
-		DBG("<- Action suspend pid=%d", pid);
+		VERB("<- suspend pid=%d", pid);
 		return;
 	}
 
@@ -349,7 +310,7 @@ static void emit_enter_signal(pid_t pid, tcb_t &tcb)
 static void emit_enter_syscall(pid_t pid, tcb_t &tcb)
 {
 	int action = shook_py_emit_enter_syscall(abort_on_python_exception, pid, tcb.context);
-	DBG("-> Action pid=%d %s", pid, action_name[action]);
+	VERB("-> pid=%d %s", pid, action_name[action]);
 
 	if (action == SHOOK_ACTION_SUSPEND) {
 		return;
@@ -392,42 +353,64 @@ static void emit_enter_syscall(pid_t pid, tcb_t &tcb)
 	tcb.state = STATE_NONE;
 	check_new_process(pid, tcb, tcb.context);
 }
-
+#if 0
+static void disable_vdso(pid_t pid, tcb_t &tcb)
+{
+	DBG("%d disable vdso", pid);
+	unsigned long base = tcb.regs.rsp;
+	unsigned long argc = ptrace(PTRACE_PEEKDATA, pid, base, NULL);
+	/* skip the argv */
+	base += (argc + 2) * sizeof(unsigned long);
+	/* skip the environment */
+	DBG("pid %d env at 0x%lx, rsp 0x%llx", pid, base, tcb.regs.rsp);
+	for (;;) {
+		unsigned long env = ptrace(PTRACE_PEEKDATA, pid, base, NULL);
+		base += sizeof(long);
+		if (!env) {
+			break;
+		}
+	}
+	/* find AT_SYSINFO_EHDR, and overwrite it to 0 */
+	for (;;) {
+		unsigned long type = ptrace(PTRACE_PEEKDATA, pid, base, NULL);
+		if (type == AT_NULL) {
+			LOG(LOG_WARN, "Cannot found AT_SYSINFO_EHDR pid=%d, rsp=0x%llx", pid, tcb.regs.rsp);
+			break;
+		} else if (type == AT_SYSINFO_EHDR) {
+			unsigned long origval = ptrace(PTRACE_PEEKDATA, pid, base + sizeof(long), NULL);
+			DBG("AT_SYSINFO_EHDR at 0x%lx 0x%lx", base, origval);
+			ptrace(PTRACE_POKEDATA, pid, base + sizeof(long), 0);
+#if 1
+			for (size_t i = 0; i < 4096; i += sizeof(long)) {
+				long ret = ptrace(PTRACE_POKEDATA, pid, origval + i, 0);
+				if (ret == -1) {
+					LOG(LOG_ERROR, "Cannot override vdso");
+					break;
+				}
+			}
+			unsigned long vsyscall_addr = 0xffffffffff600000;
+			for (size_t i = 0; i < 4096; i += sizeof(long)) {
+				long ret = ptrace(PTRACE_POKEDATA, pid, vsyscall_addr + i, 0);
+				if (ret == -1) {
+					LOG(LOG_ERROR, "Cannot override vsyscall errno=%d", errno);
+					break;
+				}
+			}
+#endif
+			break;
+		}
+		base += 2 * sizeof(long);
+	}
+}
+#endif
 static void emit_leave_syscall(pid_t pid, tcb_t &tcb)
 {
-	if (gstate.disable_vdso && tcb.context.scno == SYS_execve && tcb.context.retval == 0) {
-		DBG("%d disable vdso", pid);
-		unsigned long base = tcb.regs.rsp;
-		unsigned long argc = ptrace(PTRACE_PEEKDATA, pid, base, NULL);
-		/* skip the argv */
-		base += (argc + 2) * sizeof(unsigned long);
-		/* skip the environment */
-		DBG("pid %d env at 0x%lx, rsp 0x%lx", pid, base, tcb.regs.rsp);
-		for (;;) {
-			unsigned long env = ptrace(PTRACE_PEEKDATA, pid, base, NULL);
-			base += sizeof(long);
-			if (!env) {
-				break;
-			}
-		}
-		/* find AT_SYSINFO_EHDR, and overwrite it to 0 */
-		for (;;) {
-			unsigned long type = ptrace(PTRACE_PEEKDATA, pid, base, NULL);
-			if (type == AT_NULL) {
-				LOG(LOG_WARN, "Cannot found AT_SYSINFO_EHDR pid=%d, rsp=0x%lx", pid, tcb.regs.rsp);
-				break;
-			} else if (type == AT_SYSINFO_EHDR) {
-				unsigned long origval = ptrace(PTRACE_PEEKDATA, pid, base + sizeof(long), NULL);
-				DBG("AT_SYSINFO_EHDR at 0x%lx", origval);
-				ptrace(PTRACE_POKEDATA, pid, base + sizeof(long), 0);
-				break;
-			}
-			base += 2 * sizeof(long);
-		}
+	if (!gstate.enable_vdso && tcb.context.scno == SYS_execve && tcb.context.retval == 0) {
+		shook_disable_vdso(pid, tcb.regs.rsp);
 	}
 
 	int action = shook_py_emit_leave_syscall(abort_on_python_exception, pid, tcb.context);
-	DBG("<- Action pid=%d %s", pid, action_name[action]);
+	VERB("<- pid=%d %s", pid, action_name[action]);
 	if (action == SHOOK_ACTION_SUSPEND) {
 		DBG("<- Action suspend pid=%d", pid);
 		return;
@@ -671,6 +654,9 @@ static int run_shook(int start_pid, int pid_attach,
 	if (pid_attach != -1) {
 		int err = ptrace(PTRACE_ATTACH, pid_attach, 0, 0);
 		assert(err == 0);
+		if (!gstate.enable_vdso) {
+			shook_disable_vdso(pid_attach, 0);
+		}
 		trace_new_proc(pid_attach, SHOOK_PROCESS_ATTACHED, 0);
 	}
 	gstate.now = ya_get_tick();
@@ -745,17 +731,6 @@ static int run_shook(int start_pid, int pid_attach,
 	return 0;
 }
 
-static int openlog(const char *file)
-{
-	int fd = open(file, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
-			S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-	if (fd < 0) {
-		fprintf(stderr, "Failed open log file \"%s\", errno=%d\n", file, errno);
-		exit(1);
-	}
-	return fd;
-}
-
 static void usage()
 {
 	fprintf(stderr, "Usage: shook [-o output] [-x script] [-bg] [-p pid] command ...\n");
@@ -778,6 +753,7 @@ int main(int argc, char **argv)
 	char **script_argv = nullptr;
 
 	const char *output = nullptr;
+	unsigned int loglevel = LOG_INFO;
 	int pid_attach = -1;
 	bool background = false;
 	bool dosleep = false;
@@ -800,13 +776,13 @@ int main(int argc, char **argv)
 		} else if (strcmp(*argv, "-o") == 0) {
 			output = NEXT_ARG(argv);
 		} else if (strcmp(*argv, "-loglevel") == 0) {
-			gstate.loglevel = atoi(NEXT_ARG(argv));
+			loglevel = atoi(NEXT_ARG(argv));
 		} else if (strcmp(*argv, "-p") == 0) {
 			pid_attach = atoi(NEXT_ARG(argv));
 		} else if (strcmp(*argv, "-bg") == 0) {
 			background = true;
-		} else if (strcmp(*argv, "-disable-vdso") == 0) {
-			gstate.disable_vdso = true;
+		} else if (strcmp(*argv, "-enable-vdso") == 0) {
+			gstate.enable_vdso = true;
 		} else if (strcmp(*argv, "-abort") == 0) {
 			abort_on_python_exception = true;
 		} else if (strcmp(*argv, "-sleep") == 0) {
@@ -822,15 +798,10 @@ int main(int argc, char **argv)
 		usage();
 	}
 
-	int logfd = 2;
-	if (output) {
-		logfd = openlog(output);
-		if (logfd < 0) {
-			fprintf(stderr, "Failed open log file \"%s\", errno=%d\n", output, errno);
-			exit(1);
-		}
+	if (!shook_output_init(output, loglevel)) {
+		fprintf(stderr, "Failed open log file \"%s\", errno=%d\n", output, errno);
+		exit(1);
 	}
-	gstate.logfd = logfd;
 
 	int this_pid = getpid();
 	if (background) {
@@ -857,7 +828,7 @@ int main(int argc, char **argv)
 			open("/dev/null", O_RDWR);
 			close(1);
 			dup(0);
-			if (logfd != 2) {
+			if (output) {
 				close(2);
 				dup(0);
 			}
@@ -911,37 +882,6 @@ int main(int argc, char **argv)
 			}
 		}
 		return run_shook(start_pid, pid_attach, script_argc, script_argv);
-	}
-}
-
-static char g_logbuf[8192];
-static int g_loglen = 0;
-void shook_write(int stream, const char *str)
-{
-	const char *eol = strrchr(str, '\n');
-	if (eol) {
-		if (g_loglen > 0) {
-			write(gstate.logfd, g_logbuf, g_loglen);
-			g_loglen = 0;
-		}
-		write(gstate.logfd, str, eol + 1 - str);
-		size_t len = strlen(eol + 1);
-		if (len < sizeof(g_logbuf)) {
-			strcpy(g_logbuf, eol + 1);
-			g_loglen = len;
-		} else {
-			write(gstate.logfd, eol + 1, len);
-		}
-	} else {
-		size_t len = strlen(str);
-		if (len + g_loglen < sizeof(g_logbuf)) {
-			strcpy(g_logbuf + g_loglen, str);
-			g_loglen += len;
-		} else {
-			write(gstate.logfd, g_logbuf, g_loglen);
-			g_loglen = 0;
-			write(gstate.logfd, str, len);
-		}
 	}
 }
 

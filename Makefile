@@ -20,7 +20,7 @@ TARGET_DIR_out := target.dbg.linux.$(TARGET_ARCH)
 TARGET_SET_dir := bin src tests
 
 .PHONY: all target_mkdir
-TARGET_SET_tests := 
+TARGET_SET_tests := time
 
 TARGET_SET_lib := 
 
@@ -29,8 +29,8 @@ TARGET_CFLAGS_EXTRA := \
 
 all: $(TARGET_SET_tests:%=$(TARGET_DIR_out)/tests/%) $(TARGET_DIR_out)/bin/$(PROJECT)
 
-TARGET_SET_src := main \
-	python timerq utils \
+TARGET_SET_src := main vdso \
+	python syscallent log timerq utils \
 
 $(TARGET_DIR_out)/bin/$(PROJECT): $(TARGET_SET_src:%=$(TARGET_DIR_out)/src/%.o) $(TARGET_SET_lib:%=$(TARGET_DIR_out)/lib%.a)
 	$(TARGET_CXX) -g $(TARGET_LDFLAGS) -o $@ $^ $(TARGET_PYTHON_LDFLAGS) -lunwind-x86_64 -lunwind-ptrace
@@ -41,11 +41,11 @@ $(TARGET_DIR_out)/src/%.o: src/%.cxx | target_mkdir
 #$(TARGET_SET_src:%=$(TARGET_DIR_out)/src/%.o): $(TARGET_DIR_out)/%.o: %.cxx | target_mkdir
 #	$(TARGET_CXX) -c $(TARGET_CXXFLAGS) $(TARGET_PYTHON_CFLAGS) -o $@ $<
 #
-#$(TARGET_SET_tests:%=$(TARGET_DIR_out)/tests/%) : %: %.o $(TARGET_SET_lib:%=$(TARGET_DIR_out)/lib%.a)
-#	$(TARGET_CXX) -g $(TARGET_LDFLAGS) -o $@ $^ -lpthread -lresolv -ldl
-#
-#$(TARGET_SET_tests:%=$(TARGET_DIR_out)/tests/%.o) : $(TARGET_DIR_out)/tests/%.o: tests/%.cxx | target_mkdir
-#	$(TARGET_CXX) -c $(TARGET_CXXFLAGS) $(TARGET_CFLAGS_EXTRA) -o $@ $<
+$(TARGET_SET_tests:%=$(TARGET_DIR_out)/tests/%) : %: %.o $(TARGET_SET_lib:%=$(TARGET_DIR_out)/lib%.a) | target_mkdir
+	$(TARGET_CXX) -g $(TARGET_LDFLAGS) -o $@ $^ -lpthread -lresolv -ldl
+
+$(TARGET_DIR_out)/tests/%.o: tests/%.cxx | target_mkdir
+	$(TARGET_CXX) -c $(TARGET_CXXFLAGS) $(TARGET_CFLAGS_EXTRA) -o $@ $<
 
 TARGET_DEPFILES := $(TARGET_SET_tests:%=$(TARGET_DIR_out)/tests/%.o.d) $(TARGET_SET_src:%=$(TARGET_DIR_out)/src/%.o.d)
 

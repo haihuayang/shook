@@ -28,6 +28,34 @@ extern "C" {
 
 #define TODO_assert assert
 
+enum {
+	LOG_FATAL,
+	LOG_ERROR,
+	LOG_WARN,
+	LOG_INFO,
+	LOG_DEBUG,
+	LOG_VERB,
+	LOG_MAX,
+};
+
+#define LOG(level, ...) do { \
+	if (level <= loglevel) { \
+		shook_log(level, __VA_ARGS__); \
+	} \
+} while (0)
+
+#define DBG(fmt, ...) LOG(LOG_DEBUG, "at %s:%d " fmt, __FILE__, __LINE__, __VA_ARGS__)
+#define VERB(fmt, ...) LOG(LOG_VERB, "at %s:%d:%s " fmt, __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
+#define FATAL(fmt, ...) do { \
+	LOG(LOG_FATAL, "at %s:%d " fmt, __FILE__, __LINE__, __VA_ARGS__); \
+	abort(); \
+} while (0)
+
+extern unsigned int loglevel;
+void shook_log(int level, const char *fmt, ...) __attribute__((format (printf, 2, 3)));
+void shook_write(int stream, const char *str);
+bool shook_output_init(const char *file, unsigned int level);
+
 int py_init(const char *mod_name,
 		int script_argc, char **script_argv);
 
@@ -38,7 +66,6 @@ int shook_set_return(pid_t pid, long ret_val);
 int shook_suspend(pid_t pid, unsigned int seconds);
 int shook_resume(pid_t pid);
 int shook_detach(pid_t pid);
-void shook_write(int stream, const char *str);
 long shook_alloc_stack(pid_t pid, size_t len);
 long shook_alloc_copy(pid_t pid, const void *data, size_t len);
 
@@ -153,6 +180,19 @@ struct stackframe_t
 };
 
 int shook_backtrace(std::vector<stackframe_t> &stacks, pid_t pid, unsigned int depth);
+
+int shook_disable_vdso(pid_t pid, unsigned long rsp);
+
+#define SCNO_INVALID ((unsigned int)-1)
+enum {
+#define X(s, argc, r, p) SCNO_##s,
+#include "syscallent.h"
+#undef X
+	SCNO_MAX
+};
+
+extern const char *g_syscall_name[];
+unsigned int get_scno_by_name(const char *name);
 
 #endif
 

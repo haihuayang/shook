@@ -35,8 +35,8 @@ def process_handler(pid, event, ppid):
 	else:
 		report(pid, "UNKNOWN", 'ppid', ppid)
 
-def signal_handler(pid, signo, coredump):
-	report(pid, '+++  killed by', shook.signal_name(signo), '(core dumped)' if coredump else '', '+++')
+def signal_handler(pid, signo):
+	report(pid, '+++  killed by', shook.signal_name(signo), ' +++')
 
 def finish_handler():
 	report("finished")
