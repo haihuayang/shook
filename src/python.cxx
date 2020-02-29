@@ -56,11 +56,6 @@ static inline PyObject *py_incref(PyObject *po)
 
 #define None_obj (Py_INCREF(Py_None), Py_None)
 
-static PyObject *shook_py_help(PyObject *self, PyObject* args)
-{
-	return PyString_FromString("in shook python");
-}
-
 static void py_print_err(void)
 {
 	PyErr_Print();
@@ -303,8 +298,7 @@ static PyObject *shook_py_poke_sockaddr2(PyObject *self, PyObject *args)
 		vm_poke_mem(pid, &slen, slen_addr, sizeof(slen));
 		
 	} else {
-		/* TODO */
-		assert(0);
+		TODO_assert(0);
 		return NULL;
 	}
 
@@ -436,6 +430,12 @@ PyObject *pyobj_from_native(const struct timezone &t)
 }
 
 template <>
+bool pyobj_to_native(struct timezone &t, PyObject *po)
+{
+	return PyArg_ParseTuple(po, "ii", &t.tz_minuteswest, &t.tz_dsttime);
+}
+
+template <>
 PyObject *pyobj_from_native(const struct timeval &t)
 {
 	PyObject *po_tuple = PyTuple_New(2);
@@ -447,7 +447,7 @@ PyObject *pyobj_from_native(const struct timeval &t)
 template <>
 bool pyobj_to_native(struct timeval &t, PyObject *po)
 {
-	return PyArg_ParseTuple(po, "Ii", &t.tv_sec, &t.tv_usec);
+	return PyArg_ParseTuple(po, "ll", &t.tv_sec, &t.tv_usec);
 }
 
 template <>
@@ -462,7 +462,7 @@ PyObject *pyobj_from_native(const struct timespec &t)
 template <>
 bool pyobj_to_native(struct timespec &t, PyObject *po)
 {
-	return PyArg_ParseTuple(po, "Ii", &t.tv_sec, &t.tv_nsec);
+	return PyArg_ParseTuple(po, "ll", &t.tv_sec, &t.tv_nsec);
 }
 
 template <class T>
@@ -515,25 +515,6 @@ static PyObject *shook_py_poke_array(PyObject *self, PyObject *args)
 }
 
 
-template <class T>
-static PyObject *shook_py_peek(PyObject *self, PyObject *args)
-{
-	unsigned int pid;
-	long addr;
-
-	if (!PyArg_ParseTuple(args, "il", &pid, &addr)) {
-		return NULL;
-	}
-
-	T t;
-	int err = vm_peek_mem(pid, &t, addr, sizeof(t));
-	if (err < 0) {
-		return NULL;
-	}
-
-	return pyobj_from_native(t);
-}
-
 static PyObject *shook_py_peek_data(PyObject *self, PyObject *args)
 {
 	unsigned int pid;
@@ -553,29 +534,6 @@ static PyObject *shook_py_peek_data(PyObject *self, PyObject *args)
 	return PyBytes_FromStringAndSize(buff, length);
 }
 
-static PyObject *shook_py_alloc_stack(PyObject *self, PyObject *args)
-{
-	unsigned int pid;
-	uint32_t size;
-	if (!PyArg_ParseTuple(args, "iI", &pid, &size)) {
-		return NULL;
-	}
-	long raddr = shook_alloc_stack(pid, size + 1);
-	return PyInt_FromLong(raddr);
-}
-
-static PyObject *shook_py_alloc_copy(PyObject *self, PyObject *args)
-{
-	unsigned int pid;
-	const char *data;
-	Py_ssize_t size;
-	if (!PyArg_ParseTuple(args, "is#", &pid, &data, &size)) {
-		return NULL;
-	}
-	long raddr = shook_alloc_copy(pid, data, size + 1);
-	return PyInt_FromLong(raddr);
-}
-
 static PyObject *shook_py_poke_data(PyObject *self, PyObject *args)
 {
 	unsigned int pid;
@@ -593,35 +551,6 @@ static PyObject *shook_py_poke_data(PyObject *self, PyObject *args)
 		vm_poke_mem(pid, data, raddr, size);
 	}
 	Py_RETURN_NONE;
-}
-
-static PyObject *shook_py_poke_datav(PyObject *self, PyObject *args)
-{
-	if (PyTuple_GET_SIZE(args) < 3) {
-		return NULL;
-	}
-
-	int pid = PyInt_AsLong(PyTuple_GET_ITEM(args, 0));
-	char *data_buf;
-	Py_ssize_t data_len;
-	if (PyString_AsStringAndSize(PyTuple_GET_ITEM(args, 1), &data_buf, &data_len) < 0) {
-		return NULL;
-	}
-	size_t count = PyTuple_GET_SIZE(args) - 2;
-
-	std::unique_ptr<struct iovec []> array(new struct iovec[count]);
-	for (size_t i = 0; i < count; ++i) {
-		if (!pyobj_to_native(array[i], PyTuple_GET_ITEM(args, i + 2))) {
-			return NULL;
-		}
-	}
-
-	ssize_t err = vm_poke_memv(pid, data_buf, data_len, array.get(), count);
-	if (err < 0) {
-		return NULL;
-	}
-
-	return PyInt_FromLong(err);
 }
 
 static PyObject *shook_py_peek_datav(PyObject *self, PyObject *args)
@@ -657,6 +586,58 @@ static PyObject *shook_py_peek_datav(PyObject *self, PyObject *args)
 	return PyBytes_FromStringAndSize(data_buf, err);
 }
 
+static PyObject *shook_py_poke_datav(PyObject *self, PyObject *args)
+{
+	if (PyTuple_GET_SIZE(args) < 3) {
+		return NULL;
+	}
+
+	int pid = PyInt_AsLong(PyTuple_GET_ITEM(args, 0));
+	char *data_buf;
+	Py_ssize_t data_len;
+	if (PyString_AsStringAndSize(PyTuple_GET_ITEM(args, 1), &data_buf, &data_len) < 0) {
+		return NULL;
+	}
+	size_t count = PyTuple_GET_SIZE(args) - 2;
+
+	std::unique_ptr<struct iovec []> array(new struct iovec[count]);
+	for (size_t i = 0; i < count; ++i) {
+		if (!pyobj_to_native(array[i], PyTuple_GET_ITEM(args, i + 2))) {
+			return NULL;
+		}
+	}
+
+	ssize_t err = vm_poke_memv(pid, data_buf, data_len, array.get(), count);
+	if (err < 0) {
+		return NULL;
+	}
+
+	return PyInt_FromLong(err);
+}
+
+
+static PyObject *shook_py_alloc_stack(PyObject *self, PyObject *args)
+{
+	unsigned int pid;
+	uint32_t size;
+	if (!PyArg_ParseTuple(args, "iI", &pid, &size)) {
+		return NULL;
+	}
+	long raddr = shook_alloc_stack(pid, size + 1);
+	return PyInt_FromLong(raddr);
+}
+
+static PyObject *shook_py_alloc_copy(PyObject *self, PyObject *args)
+{
+	unsigned int pid;
+	const char *data;
+	Py_ssize_t size;
+	if (!PyArg_ParseTuple(args, "is#", &pid, &data, &size)) {
+		return NULL;
+	}
+	long raddr = shook_alloc_copy(pid, data, size + 1);
+	return PyInt_FromLong(raddr);
+}
 
 static PyObject *shook_py_syscall_name(PyObject *self, PyObject *args)
 {
@@ -826,24 +807,24 @@ static PyObject *shook_py_cancel_timer(PyObject *self, PyObject *args)
 }
 
 static PyMethodDef pymod_methods[] = {
-	{ "help", shook_py_help, METH_NOARGS,
-		"Print help." },
 	{ "register", shook_py_register, METH_VARARGS,
-		"Register event observer" },
+		R"EOF(register(event, handler, ...)
+Register event handlers)EOF" },
 	{ "set_timer", shook_py_set_timer, METH_VARARGS,
-		"Set a timer" },
+		R"EOF(set_timer(milliseconds, timer, data) -> [Int]
+Set a timer, return the timer id)EOF" },
 	{ "cancel_timer", shook_py_cancel_timer, METH_VARARGS,
 		"cancel a timer" },
 	{ "write", shook_py_write, METH_VARARGS,
 		"Register event observer" },
 	{ "backtrace", shook_py_backtrace, METH_VARARGS,
-		"Return backtrace of the pid" },
+		"(backtrace(pid) -> list of stackframes" },
 	{ "set_gdb", shook_py_set_gdb, METH_VARARGS,
-		"Register event observer" },
+		"Run gdb on the pid" },
 	{ "alloc_stack", shook_py_alloc_stack, METH_VARARGS,
-		"Suspend process seconds" },
+		"alloc_stack(pid, size) -> address" },
 	{ "alloc_copy", shook_py_alloc_copy, METH_VARARGS,
-		"Suspend process seconds" },
+		"alloc_stack(pid, data) -> address" },
 	{ "resume", shook_py_resume, METH_VARARGS,
 		"Suspend process seconds" },
 	{ "syscall_name", shook_py_syscall_name, METH_VARARGS,
@@ -851,59 +832,42 @@ static PyMethodDef pymod_methods[] = {
 	{ "signal_name", shook_py_signal_name, METH_VARARGS,
 		"Get signal name" },
 	{ "peek_path", shook_py_peek_path, METH_VARARGS,
-		"Read string from tracee" },
-	{ "peek_timezone", shook_py_peek_array<struct timezone>, METH_VARARGS,
-		"Read sockaddr from tracee" },
-	{ "peek_timeval", shook_py_peek_array<struct timeval>, METH_VARARGS,
-		"Read timeval array from tracee" },
-	{ "poke_timeval", shook_py_poke_array<struct timeval>, METH_VARARGS,
-		"Write timeval array to tracee" },
-	{ "peek_timespec", shook_py_peek_array<struct timespec>, METH_VARARGS,
-		"Read timespec array from tracee" },
-	{ "poke_timespec", shook_py_poke_array<struct timespec>, METH_VARARGS,
-		"Write timespec array to tracee" },
-	{ "peek_sockaddr", shook_py_peek_sockaddr, METH_VARARGS,
-		"Read sockaddr from tracee" },
-	{ "poke_sockaddr", shook_py_poke_sockaddr, METH_VARARGS,
-		"Write data to tracee" },
-	{ "poke_sockaddr2", shook_py_poke_sockaddr2, METH_VARARGS,
-		"Write data to tracee" },
-	{ "peek_uint32", shook_py_peek_array<uint32_t>, METH_VARARGS,
-		"Read sockaddr from tracee" },
-	{ "poke_uint32", shook_py_poke_array<uint32_t>, METH_VARARGS,
-		"Read sockaddr from tracee" },
-	{ "peek_iovec", shook_py_peek_array<struct iovec>, METH_VARARGS,
-		"Read sockaddr from tracee" },
-	{ "peek_msghdr", shook_py_peek_array<struct msghdr>, METH_VARARGS,
-		"Read sockaddr from tracee" },
-	{ "poke_msghdr", shook_py_poke_array<struct msghdr>, METH_VARARGS,
-		"Read sockaddr from tracee" },
-	{ "peek_mmsghdr", shook_py_peek_array<struct mmsghdr>, METH_VARARGS,
-		"Read sockaddr from tracee" },
-	{ "poke_mmsghdr", shook_py_poke_array<struct mmsghdr>, METH_VARARGS,
-		"Read sockaddr from tracee" },
-#if 0
-	{ "poke_iovec", shook_py_poke_array<struct iovec>, METH_VARARGS,
-		"Read sockaddr from tracee" },
-#endif
-	{ "peek_pollfd", shook_py_peek_array<struct pollfd>, METH_VARARGS,
-		"Read sockaddr from tracee" },
-	{ "poke_pollfd", shook_py_poke_array<struct pollfd>, METH_VARARGS,
-		"Read sockaddr from tracee" },
-	{ "peek_epoll_event", shook_py_peek_array<struct epoll_event>, METH_VARARGS,
-		"Read sockaddr from tracee" },
-	{ "poke_epoll_event", shook_py_poke_array<struct epoll_event>, METH_VARARGS,
-		"Read sockaddr from tracee" },
-	// { "readstr", shook_py_readstr, METH_VARARGS,
-		// "Read string from tracee" },
+		"Read path from tracee" },
+#define PEEK_POKE_ARRAY(type, name) \
+	{ "peek_" name, shook_py_peek_array<type>, METH_VARARGS, "Read " name " array from tracee" }, \
+	{ "poke_" name, shook_py_poke_array<type>, METH_VARARGS, "Write " name " array to tracee" },
+
+	PEEK_POKE_ARRAY(uint32_t, "uint32")
+	PEEK_POKE_ARRAY(struct timezone, "timezone")
+	PEEK_POKE_ARRAY(struct timeval, "timeval")
+	PEEK_POKE_ARRAY(struct timespec, "timespec")
+	PEEK_POKE_ARRAY(struct iovec, "iovec")
+	PEEK_POKE_ARRAY(struct msghdr, "msghdr")
+	PEEK_POKE_ARRAY(struct mmsghdr, "mmsghdr")
+	PEEK_POKE_ARRAY(struct pollfd, "pollfd")
+	PEEK_POKE_ARRAY(struct epoll_event, "epoll_event")
+
 	{ "peek_data", shook_py_peek_data, METH_VARARGS,
-		"Write data to tracee" },
+		"Read data from tracee" },
 	{ "poke_data", shook_py_poke_data, METH_VARARGS,
 		"Write data to tracee" },
+
 	{ "peek_datav", shook_py_peek_datav, METH_VARARGS,
-		"Write data to tracee" },
+		R"EOF(peek_datav(pid, total | None, (addr, len), ...) -> data
+Read data from pid's space)EOF" },
 	{ "poke_datav", shook_py_poke_datav, METH_VARARGS,
-		"Write data to tracee" },
+		R"EOF(poke_datav(pid, data, (addr, len), ...)
+"Write data to tracee)EOF" },
+
+	{ "peek_sockaddr", shook_py_peek_sockaddr, METH_VARARGS,
+		R"EOF(peek_sockaddr(pid, addr, slen) -> tuple
+Read sockaddr from tracee)EOF" },
+	{ "poke_sockaddr", shook_py_poke_sockaddr, METH_VARARGS,
+		R"EOF(poke_sockaddr(pid, addr, len, af, ...)
+Write sockaddr to tracee)EOF" },
+	{ "poke_sockaddr2", shook_py_poke_sockaddr2, METH_VARARGS,
+		R"EOF(poke_sockaddr2(pid, addr, plen, af, ...)
+Write sockaddr to tracee, unlike to poke_sockaddr, plen is an address)EOF" },
 	{NULL,              NULL}           /* sentinel */
 };
 

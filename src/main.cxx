@@ -90,59 +90,6 @@ struct gstate_t
 static gstate_t gstate;
 static bool abort_on_python_exception = false;
 
-#if 0
-static int openlog(const char *file)
-{
-	int fd = open(file, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
-			S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-	if (fd < 0) {
-		fprintf(stderr, "Failed open log file \"%s\", errno=%d\n", file, errno);
-		exit(1);
-	}
-	return fd;
-}
-
-static void dolog(int level, const char *fmt, ...) __attribute__((format (printf, 2, 3)));
-static void dolog(int level, const char *fmt, ...)
-{
-	char buff[1024], *p = buff, *end = p + sizeof(buff) - 1; // 1 byte for \n
-	struct tm tm_now;
-	struct timeval tv_now;
-	gettimeofday(&tv_now, NULL);
-	time_t t = tv_now.tv_sec;
-	localtime_r(&t, &tm_now);
-	int l = strftime(p, end - p, "%T", &tm_now);
-	if (l == 0) {
-		goto truncated;
-	}
-	p += l;
-	l = snprintf(p, end - p, ":%06d %s ", (unsigned int)tv_now.tv_usec, level_name[level]);
-	if (p + l >= end) {
-		goto truncated;
-	}
-	p += l;
-
-	va_list va;
-	va_start(va, fmt);
-	l = vsnprintf(p, end - p, fmt, va);
-	assert(l >= 0);
-	if (p + l >= end) {
-		goto truncated;
-	}
-	p += l;
-
-output:
-	*p++ = '\n';
-	write(gstate.logfd, buff, p - buff);
-	return;
-
-truncated:
-	p = end - 2;
-	*p++ = '>';
-	*p++ = '>';
-	goto output;
-}
-#endif
 static void detached(tcb_t &tcb)
 {
 	shook_py_emit_process(abort_on_python_exception, tcb.pid, SHOOK_PROCESS_DETACHED, 0);
@@ -353,56 +300,7 @@ static void emit_enter_syscall(pid_t pid, tcb_t &tcb)
 	tcb.state = STATE_NONE;
 	check_new_process(pid, tcb, tcb.context);
 }
-#if 0
-static void disable_vdso(pid_t pid, tcb_t &tcb)
-{
-	DBG("%d disable vdso", pid);
-	unsigned long base = tcb.regs.rsp;
-	unsigned long argc = ptrace(PTRACE_PEEKDATA, pid, base, NULL);
-	/* skip the argv */
-	base += (argc + 2) * sizeof(unsigned long);
-	/* skip the environment */
-	DBG("pid %d env at 0x%lx, rsp 0x%llx", pid, base, tcb.regs.rsp);
-	for (;;) {
-		unsigned long env = ptrace(PTRACE_PEEKDATA, pid, base, NULL);
-		base += sizeof(long);
-		if (!env) {
-			break;
-		}
-	}
-	/* find AT_SYSINFO_EHDR, and overwrite it to 0 */
-	for (;;) {
-		unsigned long type = ptrace(PTRACE_PEEKDATA, pid, base, NULL);
-		if (type == AT_NULL) {
-			LOG(LOG_WARN, "Cannot found AT_SYSINFO_EHDR pid=%d, rsp=0x%llx", pid, tcb.regs.rsp);
-			break;
-		} else if (type == AT_SYSINFO_EHDR) {
-			unsigned long origval = ptrace(PTRACE_PEEKDATA, pid, base + sizeof(long), NULL);
-			DBG("AT_SYSINFO_EHDR at 0x%lx 0x%lx", base, origval);
-			ptrace(PTRACE_POKEDATA, pid, base + sizeof(long), 0);
-#if 1
-			for (size_t i = 0; i < 4096; i += sizeof(long)) {
-				long ret = ptrace(PTRACE_POKEDATA, pid, origval + i, 0);
-				if (ret == -1) {
-					LOG(LOG_ERROR, "Cannot override vdso");
-					break;
-				}
-			}
-			unsigned long vsyscall_addr = 0xffffffffff600000;
-			for (size_t i = 0; i < 4096; i += sizeof(long)) {
-				long ret = ptrace(PTRACE_POKEDATA, pid, vsyscall_addr + i, 0);
-				if (ret == -1) {
-					LOG(LOG_ERROR, "Cannot override vsyscall errno=%d", errno);
-					break;
-				}
-			}
-#endif
-			break;
-		}
-		base += 2 * sizeof(long);
-	}
-}
-#endif
+
 static void emit_leave_syscall(pid_t pid, tcb_t &tcb)
 {
 	if (!gstate.enable_vdso && tcb.context.scno == SYS_execve && tcb.context.retval == 0) {
@@ -733,7 +631,14 @@ static int run_shook(int start_pid, int pid_attach,
 
 static void usage()
 {
-	fprintf(stderr, "Usage: shook [-o output] [-x script] [-bg] [-p pid] command ...\n");
+	fprintf(stderr, R"EOF(Usage: shook [-o output] [-bg] [-enable-vdso] [-p pid] -x script ... -- [command ...]
+	-o file		output to file, default stderr
+	-bg		run shook in background
+	-enable-vdso	not intercept vdso functions
+	-p pid		attach the process
+	-x script ...	python script and the optional arguments
+	command ...	the trace command and its arguments
+)EOF");
 	exit(1);
 }
 
