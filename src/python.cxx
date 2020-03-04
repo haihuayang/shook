@@ -325,6 +325,19 @@ bool pyobj_to_native(uint32_t &t, PyObject *po)
 }
 
 template <>
+PyObject *pyobj_from_native(const uint64_t &t)
+{
+	return PyLong_FromUnsignedLong(t);
+}
+
+template <>
+bool pyobj_to_native(uint64_t &t, PyObject *po)
+{
+	t = PyLong_AsUnsignedLong(po);
+	return true;
+}
+
+template <>
 PyObject *pyobj_from_native(const struct iovec &t)
 {
 	PyObject *po_tuple = PyTuple_New(2);
@@ -838,6 +851,7 @@ Set a timer, return the timer id)EOF" },
 	{ "poke_" name, shook_py_poke_array<type>, METH_VARARGS, "Write " name " array to tracee" },
 
 	PEEK_POKE_ARRAY(uint32_t, "uint32")
+	PEEK_POKE_ARRAY(uint64_t, "uint64")
 	PEEK_POKE_ARRAY(struct timezone, "timezone")
 	PEEK_POKE_ARRAY(struct timeval, "timeval")
 	PEEK_POKE_ARRAY(struct timespec, "timespec")
