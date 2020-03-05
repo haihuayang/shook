@@ -121,7 +121,7 @@ static PyObject *shook_py_set_gdb(PyObject *self, PyObject *args)
 static PyObject *shook_py_resume(PyObject *self, PyObject *args)
 {
 	unsigned int pid;
-	if (!PyArg_ParseTuple(args, "I", &pid)) {
+	if (!PyArg_ParseTuple(args, "i", &pid)) {
 		return NULL;
 	}
 
@@ -824,26 +824,31 @@ static PyMethodDef pymod_methods[] = {
 		R"EOF(register(event, handler, ...)
 Register event handlers)EOF" },
 	{ "set_timer", shook_py_set_timer, METH_VARARGS,
-		R"EOF(set_timer(milliseconds, timer, data) -> [Int]
-Set a timer, return the timer id)EOF" },
+		R"EOF(set_timer(milliseconds, timer, data) -> timer_id
+Return the timer id)EOF" },
 	{ "cancel_timer", shook_py_cancel_timer, METH_VARARGS,
-		"cancel a timer" },
+		R"EOF(cancel_timer(timer_id)
+Cancel a timer)EOF" },
 	{ "write", shook_py_write, METH_VARARGS,
-		"Register event observer" },
+		R"EOF(write(stream, string)
+Write string to shook output.)EOF" },
 	{ "backtrace", shook_py_backtrace, METH_VARARGS,
-		"(backtrace(pid) -> list of stackframes" },
+		R"EOF(backtrace(pid [, depth]) -> (stackframe, ...)
+Return the tracee's stack frames)EOF" },
 	{ "set_gdb", shook_py_set_gdb, METH_VARARGS,
 		"Run gdb on the pid" },
 	{ "alloc_stack", shook_py_alloc_stack, METH_VARARGS,
-		"alloc_stack(pid, size) -> address" },
+		R"EOF(alloc_stack(pid, size) -> addr
+Allocated space in tracee's stack, and return the address)EOF" },
 	{ "alloc_copy", shook_py_alloc_copy, METH_VARARGS,
-		"alloc_stack(pid, data) -> address" },
+		R"EOF(alloc_copy(pid, data) -> addr
+Allocated space in tracee's stack, copy the data into it and return the address)EOF" },
 	{ "resume", shook_py_resume, METH_VARARGS,
-		"Suspend process seconds" },
+		"Resume process" },
 	{ "syscall_name", shook_py_syscall_name, METH_VARARGS,
-		"Get syscall name" },
+		"Return syscall name" },
 	{ "signal_name", shook_py_signal_name, METH_VARARGS,
-		"Get signal name" },
+		"Return signal name" },
 	{ "peek_path", shook_py_peek_path, METH_VARARGS,
 		"Read path from tracee" },
 #define PEEK_POKE_ARRAY(type, name) \
@@ -862,16 +867,18 @@ Set a timer, return the timer id)EOF" },
 	PEEK_POKE_ARRAY(struct epoll_event, "epoll_event")
 
 	{ "peek_data", shook_py_peek_data, METH_VARARGS,
-		"Read data from tracee" },
+		R"EOF(peek_data(pid, addr, len) -> data
+Read data from tracee)EOF" },
 	{ "poke_data", shook_py_poke_data, METH_VARARGS,
-		"Write data to tracee" },
+		R"EOF(poke_data(pid, data, addr, len)
+Write data to tracee)EOF" },
 
 	{ "peek_datav", shook_py_peek_datav, METH_VARARGS,
 		R"EOF(peek_datav(pid, total | None, (addr, len), ...) -> data
-Read data from pid's space)EOF" },
+Read data from tracee)EOF" },
 	{ "poke_datav", shook_py_poke_datav, METH_VARARGS,
 		R"EOF(poke_datav(pid, data, (addr, len), ...)
-"Write data to tracee)EOF" },
+Write data to tracee)EOF" },
 
 	{ "peek_sockaddr", shook_py_peek_sockaddr, METH_VARARGS,
 		R"EOF(peek_sockaddr(pid, addr, slen) -> tuple
