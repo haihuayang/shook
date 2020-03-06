@@ -80,7 +80,6 @@ class Epoll(object):
 			return -errno.ENOENT
 
 
-# TODO FD_CLOEXEC, fcntl fd 2 1, remove the fd after execve 
 class TraceeMgmt:
 	class Tracee:
 		def __init__(self, pid, main_pid, fd_table):
@@ -224,6 +223,17 @@ class TraceeMgmt:
 					self.close_fd(pid, fd)
 				elif self.strict:
 					return shook.ACTION_GDB,
+		elif scno == shook.SYS_execve:
+			if retval == 0:
+				# remove all fd with F_CLOEXEC after execve succeed
+				new_fd_tbl = { }
+				tracee = self.tracee_tbl[pid]
+				for fd, fd_data in tracee.fd_table.items():
+					flags, fd_obj, user_data = fd_data
+					if (flags & self.F_CLOEXEC) == 0:
+						new_fd_tbl[fd] = [flags, fd_obj, user_data]
+				tracee.fd_table = new_fd_tbl
+				
 		elif scno == shook.SYS_ioctl:
 			fd, op, val = args
 			if retval is None:
