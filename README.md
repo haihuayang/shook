@@ -1,6 +1,6 @@
 # README #
 
-Shook stands for syscall hook.
+Shook stands for syscall hook, a utility licenced under open source Apache 2 license.
 
 Register python hooks to handle entering and leaving system call, entering signal.
 The hooks can access tracee's system call arguments and return value.
