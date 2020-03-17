@@ -684,6 +684,21 @@ static PyObject *shook_py_signal_name(PyObject *self, PyObject *args)
 	return po;
 }
 
+static PyObject *shook_py_clock_gettime(PyObject *self, PyObject *args)
+{
+	unsigned int clk_id;
+	if (!PyArg_ParseTuple(args, "I", &clk_id)) {
+		return NULL;
+	}
+
+	if (clk_id <= CLOCK_MONOTONIC) {
+		struct timespec tv;
+		clock_gettime(clk_id, &tv);
+		return pyobj_from_native(tv);
+	}
+	return NULL;
+}
+
 static PyObject *shook_py_write(PyObject *self, PyObject *args)
 {
 	const char *arg;
@@ -849,6 +864,9 @@ Allocated space in tracee's stack, copy the data into it and return the address)
 		"Return syscall name" },
 	{ "signal_name", shook_py_signal_name, METH_VARARGS,
 		"Return signal name" },
+	{ "clock_gettime", shook_py_clock_gettime, METH_VARARGS,
+		R"EOF(clock_gettime(clk_id) -> timespec
+Return signal name)EOF" },
 	{ "peek_path", shook_py_peek_path, METH_VARARGS,
 		"Read path from tracee" },
 #define PEEK_POKE_ARRAY(type, name) \
@@ -977,6 +995,9 @@ int py_init(const char *pymod_name,
 
 	ADD_INT_PYOBJECT(SOCK_NONBLOCK);
 	ADD_INT_PYOBJECT(SOCK_CLOEXEC);
+
+	ADD_INT_PYOBJECT(CLOCK_REALTIME);
+	ADD_INT_PYOBJECT(CLOCK_MONOTONIC);
 
 	ADD_INT_PYOBJECT(AT_FDCWD);
 

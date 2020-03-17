@@ -13,10 +13,18 @@ def report(*args):
 	print(str_time(), *args)
 	sys.stdout.flush()
 
-def output_backtrace(pid):
+def report_backtrace(pid, msg):
 	stacks = shook.backtrace(pid)
+	if len(stacks) > 2 and stacks[1][2] == 'dbghdrclass':
+		return
+	report(pid, msg)
+	do_gdb = False
 	for ip, offset, symbol in stacks:
 		print('    0x%x %s+%d' % (ip, symbol, offset))
+		if offset == 857 and symbol == 'krb5_verify_ap_req2':
+			do_gdb = True
+	if do_gdb:
+		shook.set_gdb(pid)
 
 class Globals:
 	shift_seconds = 0
@@ -28,19 +36,16 @@ def syscall_handler(pid, retval, scno, *args):
 	if scno == shook.SYS_clock_gettime:
 		if retval == 0 and args[0] == CLOCK_REALTIME:
 			sec, nsec = shook.peek_timespec(pid, args[1], 1)[0]
-			report(pid, "shift realtime (%d, %d)" % (sec, nsec))
-			output_backtrace(pid)
+			report_backtrace(pid, "realtime (%d, %d)" % (sec, nsec))
 			shook.poke_timespec(pid, args[1], (sec + Globals.shift_seconds, nsec))
 	elif scno == shook.SYS_gettimeofday:
 		if retval == 0:
 			sec, usec = shook.peek_timeval(pid, args[0], 1)[0]
-			report(pid, "shift gettimeofday (%d, %d)" % (sec, usec))
-			output_backtrace(pid)
+			report_backtrace(pid, "gettimeofday (%d, %d)" % (sec, usec))
 			shook.poke_timeval(pid, args[0], (sec + Globals.shift_seconds, usec))
 	elif scno == shook.SYS_time:
 		if not retval in [ None, -1 ]:
-			report(pid, "shift time %d" % retval)
-			output_backtrace(pid)
+			report_backtrace(pid, "time %d" % retval)
 			return shook.ACTION_RETURN, retval + Globals.shift_seconds
 
 
