@@ -128,8 +128,10 @@ static void set_syscall(pid_t pid, const char *name, unsigned long raddr)
 	/* cannot use process_vm_writev, because the address is RO */
 	ssize_t ret = poke_text(pid, raddr, buf, sizeof buf);
 	if (ret < 0) {
-		LOG(LOG_ERROR, "Fail to rewrite syscall %s at 0x%lx",
-				name, raddr);
+		/* TODO some linux kernel forbit rewriting vdso memory, e.g.,
+		 * devvm docker 3.10.0-514.16.1.el6.nutanix.20170430.cvm.x86_64 */
+		LOG(LOG_ERROR, "Fail to rewrite syscall %s at 0x%lx, errno=%d",
+				name, raddr, errno);
 	} else {
 		DBG("success to rewrite syscall %s", name);
 	}
@@ -144,6 +146,7 @@ int shook_disable_vdso(pid_t pid, unsigned long rsp)
 	unsigned long vdso_addr = rsp ?
 		get_vdso_addr_by_rsp(pid, rsp) : get_vdso_addr_by_proc(pid);
 	unsigned long page_size = get_pagesize();
+	DBG("vdso at 0x%lx, page_size %lu", vdso_addr, page_size);
 
 	/* TODO decide elf size, now we always use 2 page */
 	char *vdso_buf = (char *)mmap(NULL, 2 * page_size, PROT_READ | PROT_WRITE,
