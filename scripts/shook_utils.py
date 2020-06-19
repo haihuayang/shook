@@ -274,7 +274,7 @@ class TraceeMgmt:
 					self.close_fd(pid, fdnew)
 					self.dup_fd(pid, fdold, retval, self.F_CLOEXEC if flags & self.O_CLOEXEC else 0)
 		elif scno == shook.SYS_socket:
-			if retval >= 0:
+			if retval is not None and retval >= 0:
 				domain, type, protocol = args
 				flags = 0
 				if type & shook.SOCK_NONBLOCK:
