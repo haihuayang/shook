@@ -12,8 +12,8 @@ TARGET_CXXFLAGS = $(TARGET_PROJECT_CFLAGS) -std=c++11 -MT $@ -MMD -MP -MF $@.d
 TARGET_CC = gcc
 TARGET_CXX = g++
 
-TARGET_PYTHON_CFLAGS := $(shell pkg-config --cflags python)
-TARGET_PYTHON_LDFLAGS := $(shell pkg-config --libs python)
+TARGET_PYTHON_CFLAGS := $(shell pkg-config --cflags python3)
+TARGET_PYTHON_LDFLAGS := $(shell pkg-config --libs python3)
 
 TARGET_DIR_out := target.dbg.linux.$(TARGET_ARCH)
 

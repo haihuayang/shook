@@ -2,9 +2,7 @@
 #ifndef __globals__hxx__
 #define __globals__hxx__
 
-#define PY_SSIZE_T_CLEAN
-
-#include <Python.h>
+#include "pycomp.hxx"
 
 #define _GNU_SOURCE 1
 #include <unistd.h>

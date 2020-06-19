@@ -7,20 +7,20 @@ static void test_gettimeofday()
 {
 	struct timeval tv;
 	int err = gettimeofday(&tv, NULL);
-	printf("gettimeofday ret %d, %d:%d\n", err, tv.tv_sec, tv.tv_usec);
+	printf("gettimeofday ret %d, %ld:%ld\n", err, tv.tv_sec, tv.tv_usec);
 }
 
 static void test_realtime()
 {
 	struct timespec ts;
 	int err = clock_gettime(CLOCK_REALTIME, &ts);
-	printf("realtime ret %d, %d:%d\n", err, ts.tv_sec, ts.tv_nsec);
+	printf("realtime ret %d, %ld:%ld\n", err, ts.tv_sec, ts.tv_nsec);
 }
 
 static void test_time()
 {
 	time_t t = time(NULL);
-	printf("time ret %d, %d\n", t);
+	printf("time ret %ld\n", t);
 }
 
 int main()

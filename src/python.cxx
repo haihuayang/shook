@@ -936,12 +936,43 @@ sys.stdout = ShookFile(1)
 sys.stderr = ShookFile(2)
 )EOF";
 
+#define MODULE_NAME "shook"
+#ifdef IS_PY3K
+static struct PyModuleDef moduledef = {
+	PyModuleDef_HEAD_INIT,
+	MODULE_NAME,
+	NULL,
+	-1,
+	pymod_methods,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+};
+
+PyMODINIT_FUNC init_module (void);
+PyMODINIT_FUNC init_module (void)
+{
+	return PyModule_Create(&moduledef);
+}
+#endif
+
 int py_init(const char *pymod_name,
 		int script_argc, char **script_argv)
 {
+#ifdef IS_PY3K
+	PyImport_AppendInittab(MODULE_NAME, init_module);
+#endif
+
 	Py_Initialize();
 
-	PyObject *mod_this = Py_InitModule(pymod_name, pymod_methods);
+	PyObject *mod_this;
+#ifdef IS_PY3K
+	mod_this = PyImport_ImportModule(MODULE_NAME);
+#else
+	mod_this = Py_InitModule(MODULE_NAME, pymod_methods);
+#endif
+	assert(mod_this);
 
 	PyObject *mm = PyImport_AddModule("__main__");
 	Py_INCREF(mod_this);
@@ -1001,7 +1032,21 @@ int py_init(const char *pymod_name,
 
 	ADD_INT_PYOBJECT(AT_FDCWD);
 
+#ifdef IS_PY3K
+	{
+		std::vector<wchar_t *> _argv(script_argc);
+		for (int i = 0; i < script_argc; i++) {
+			wchar_t* arg = Py_DecodeLocale(script_argv[i], NULL);
+			_argv[i] = arg;
+		}
+		PySys_SetArgvEx(script_argc, _argv.data(), 0);
+		for (int i = 0; i < script_argc; i++) {
+			PyMem_RawFree(_argv[i]);
+		}
+	}
+#else
 	PySys_SetArgvEx(script_argc, script_argv, 0);
+#endif
 	{
 		FILE *fp = fopen(script_argv[0], "r");
 		if (fp == NULL) {
