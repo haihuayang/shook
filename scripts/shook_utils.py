@@ -17,9 +17,9 @@ def report(*args):
 FIONREAD = 0x541B
 FIONBIO  = 0x5421
 class FD(object):
-	def on_getsockname(self, fd):
+	def on_getsockname(self, pid, fd, sa, salen):
 		return None
-	def on_getpeername(self, fd):
+	def on_getpeername(self, pid, fd, sa, salen):
 		return None
 	def on_fionread(self, pid):
 		assert False
@@ -288,23 +288,29 @@ class TraceeMgmt:
 				fd, sa, slen = args
 				_, fd_obj, _ = self.get_fd(pid, fd)
 				if isinstance(fd_obj, FD):
-					sockaddr = fd_obj.on_getsockname(fd)
+					return fd_obj.on_getsockname(pid, fd, sa, slen)
+					'''
+					sockaddr = fd_obj.on_getsockname(pid, fd)
 					if sockaddr is None:
 						return shook.ACTION_BYPASS, -errno.ENOTSOCK
 					else:
 						shook.poke_sockaddr2(pid, sa, slen, *sockaddr)
 						return shook.ACTION_BYPASS, 0
+					'''
 		elif scno == shook.SYS_getpeername:
 			if retval is None:
 				fd, sa, slen = args
 				_, fd_obj, _ = self.get_fd(pid, fd)
 				if isinstance(fd_obj, FD):
-					sockaddr = fd_obj.on_getpeername(fd)
+					return fd_obj.on_getpeername(pid, fd, sa, slen)
+					'''
+					sockaddr = fd_obj.on_getpeername(pid, fd, sa, slen)
 					if sockaddr is None:
 						return shook.ACTION_BYPASS, -errno.ENOTSOCK
 					else:
 						shook.poke_sockaddr2(pid, sa, slen, *sockaddr)
 						return shook.ACTION_BYPASS, 0
+					'''
 		elif scno == shook.SYS_read:
 			fd, addr, length = args
 			_, fd_obj, _ = self.get_fd(pid, fd)
