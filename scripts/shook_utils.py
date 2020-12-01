@@ -21,6 +21,8 @@ class FD(object):
 		return None
 	def on_getpeername(self, pid, fd, sa, salen):
 		return None
+	def on_ioctl(self, pid, fd, op, val):
+		return None
 	def on_fionread(self, pid):
 		assert False
 	def on_read(self, pid, retval, fd, addr, length):
@@ -79,11 +81,11 @@ class Epoll(object):
 		except KeyError:
 			return -errno.ENOENT
 
-
-class TraceeMgmt:
+class TraceeMgmt__:
 	class Tracee:
 		def __init__(self, pid, main_pid, fd_table):
 			self.pid, self.main_pid, self.fd_table = pid, main_pid, fd_table
+			self.cwd = None
 			self.data = []
 
 	def __init__(self, **kwargs):
@@ -97,20 +99,37 @@ class TraceeMgmt:
 		if self.debug:
 			report(*args)
 
-	def register_handlers(self, syscall_handlers, **kwargs):
-		signal_handlers = kwargs.pop('signal_handler', None)
-		process_handlers = kwargs.pop('process_handler', [])
-			
-		handlers = list(syscall_handlers)
-		handlers.append(self.handle_syscall)
-		shook.register(shook.EVENT_SYSCALL, *handlers)
-		
-		if signal_handlers is not None:
-			shook.register(shook.EVENT_SIGNAL, *signal_handlers)
+	def register_handlers(self, *handlers):
+		syscall_hooks = [ ]
+		for handler in handlers:
+			hook = getattr(handler, "syscall_hook", None)
+			if hook:
+				syscall_hooks.append(hook)
+		syscall_hooks.append(self.syscall_hook)
+		shook.register(shook.EVENT_SYSCALL, *syscall_hooks)
 
-		handlers = list(process_handlers)
-		handlers.insert(0, self.handle_pid_event)
-		shook.register(shook.EVENT_PROCESS, *handlers)
+		process_hooks = [ self.process_hook ]
+		for handler in handlers:
+			hook = getattr(handler, "process_hook", None)
+			if hook:
+				process_hooks.append(hook)
+		shook.register(shook.EVENT_PROCESS, *process_hooks)
+		
+		signal_hooks = [ ]
+		for handler in handlers:
+			hook = getattr(handler, "signal_hook", None)
+			if hook:
+				signal_hooks.append(hook)
+		if signal_hooks:
+			shook.register(shook.EVENT_SIGNAL, *signal_hooks)
+
+		finish_hooks = [ ]
+		for handler in handlers:
+			hook = getattr(handler, "finish_hook", None)
+			if hook:
+				finish_hooks.append(hook)
+		if finish_hooks:
+			shook.register(shook.EVENT_FINISH, *finish_hooks)
 
 	def attached(self, pid):
 		# not fd table is empty
@@ -125,6 +144,12 @@ class TraceeMgmt:
 		
 	def get_main_pid(self, pid):
 		return self.tracee_tbl[pid].main_pid
+
+	def set_cwd(self, pid, path):
+		self.tracee_tbl[pid].cwd = path
+
+	def get_cwd(self, pid):
+		return self.tracee_tbl[pid].cwd
 
 	def push(self, pid, *data):
 		self.tracee_tbl[pid].data.append(data)
@@ -190,7 +215,7 @@ class TraceeMgmt:
 		except KeyError:
 			pass
 
-	def handle_pid_event(self, pid, event, ppid):
+	def process_hook(self, pid, event, ppid):
 		if event == shook.PROCESS_CREATED:
 			report('PID', pid, 'created')
 			self.attached(pid)
@@ -212,7 +237,7 @@ class TraceeMgmt:
 		else:
 			assert False
 
-	def handle_syscall(self, pid, retval, scno, *args):
+	def syscall_hook(self, pid, retval, scno, *args):
 		if scno == shook.SYS_close:
 			if retval is not None:
 				fd, = args
@@ -237,13 +262,17 @@ class TraceeMgmt:
 		elif scno == shook.SYS_ioctl:
 			fd, op, val = args
 			if retval is None:
-				if op == FIONREAD:
-					_, fd_obj, _ = self.get_fd(pid, fd)
-					if isinstance(fd_obj, FD):
+				_, fd_obj, _ = self.get_fd(pid, fd)
+				if isinstance(fd_obj, FD):
+					if op == FIONREAD:
 						nread = fd_obj.on_fionread(pid)
 						if nread is not None:
 							shook.poke_uint32(pid, val, nread)
 							return shook.ACTION_BYPASS, 0
+					else:
+						ret = fd_obj.on_ioctl(pid, fd, op, val)
+						if ret is not None:
+							return shook.ACTION_BYPASS, ret
 			elif retval is not None:
 				if retval >= 0 and op == 0x5421:
 					opt = shook.peek_uint32(pid, val, 1)[0]
@@ -417,9 +446,9 @@ class TraceeMgmt:
 					_, fd_obj, _ = self.get_fd(pid, pfd[0])
 					if isinstance(fd_obj, Pollable):
 						revents = 0
-						if pfd[1] & select.POLLOUT and fd_obj.want_send(fd):
+						if pfd[1] & select.POLLOUT and fd_obj.want_send(pfd[0]):
 							revents |= select.POLLOUT
-						if pfd[1] & select.POLLIN and fd_obj.want_recv(fd):
+						if pfd[1] & select.POLLIN and fd_obj.want_recv(pfd[0]):
 							revents |= select.POLLIN
 						ret_pollfd.append((pfd[0], pfd[1], revents, index))
 						if revents != 0:
@@ -453,4 +482,8 @@ class TraceeMgmt:
 					pollfd = shook.peek_pollfd(pid, fds, nfds)
 					self.dprint('not modified', retval, pollfd)
 					
+# TODO TraceeMgmt__ is singleton
+the_tracee_manager = TraceeMgmt__()
+def get_tracee_manager():
+	return the_tracee_manager
 
