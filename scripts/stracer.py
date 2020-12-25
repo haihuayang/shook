@@ -110,8 +110,7 @@ def dissect_readlink(stracer, pid, retval, scno, *args):
 		return '"%s", 0x%x, %d' % (shook.peek_path(pid, path), buf, bufsize)
 	elif retval > 0:
 		path, buf, bufsize = args
-		return ' "%s"' % shook.peek_data(buf, retval)
-		
+		return ' "%s"' % shook.peek_data(pid, buf, retval)
 	else:
 		return ''
 
@@ -139,13 +138,16 @@ def dissect_socket(stracer, pid, retval, scno, *args):
 		else:
 			domain_name = 'AF_%d' % domain
 
+		socktype_low = (socktype & 0xf)
 		for v, n in socktype_names:
-			if socktype == v:
+			if socktype_low == v:
 				socktype_name = n
 				break
 		else:
-			socktype_name = 'SOCK_%d' % socktype
-
+			socktype_name = 'SOCK_%d' % socktype_low
+		socktype_high = (socktype & 0xfffffff0)
+		if socktype_high != 0:
+			socktype_name = socktype_name + '-0x%x' % socktype_high
 		return '%s, %s, %d' % (domain_name, socktype_name, protocol)
 	else:
 		return ''
