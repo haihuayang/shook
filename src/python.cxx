@@ -135,17 +135,23 @@ static PyObject *shook_py_resume(PyObject *self, PyObject *args)
 static PyObject *shook_py_peek_path(PyObject *self, PyObject *args)
 {
 	unsigned int pid;
+	unsigned int length = PATH_MAX;
 	long addr;
 
-	if (!PyArg_ParseTuple(args, "il", &pid, &addr)) {
+	if (!PyArg_ParseTuple(args, "il|I", &pid, &addr, &length)) {
 		return NULL;
 	}
 
-	char buff[PATH_MAX];
-	int err = vm_peek_str(pid, buff, addr, PATH_MAX);
+	if (length > PATH_MAX) {
+		length = PATH_MAX;
+	}
+
+	char buff[PATH_MAX + 1];
+	int err = vm_peek_str(pid, buff, addr, length);
 	if (err < 0) {
 		return NULL;
 	}
+	buff[length] = '\0';
 	return PyString_FromString(buff);
 }
 
