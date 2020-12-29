@@ -1087,7 +1087,7 @@ int shook_py_emit_enter_signal(bool abort_on_error, pid_t pid, context_t &ctx)
 		if (!po_ret) {
 			py_print_err();
 			if (abort_on_error) {
-				abort();
+				return SHOOK_ABORT;
 			}
 		} else if (po_ret == Py_None) {
 		} else if (!PyTuple_Check(po_ret)) {
@@ -1147,7 +1147,7 @@ int shook_py_emit_enter_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
 		if (po_ret == NULL) {
 			py_print_err();
 			if (abort_on_error) {
-				abort();
+				return SHOOK_ABORT;
 			}
 			ctx.stack.push_back(ctx.last_args);
 		} else if (po_ret == Py_None) {
@@ -1225,7 +1225,7 @@ int shook_py_emit_leave_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
 		if (po_ret == nullptr) {
 			py_print_err();
 			if (abort_on_error) {
-				abort();
+				return SHOOK_ABORT;
 			}
 		} else if (po_ret == Py_None) {
 		} else if (!PyTuple_Check(po_ret)) {
@@ -1267,7 +1267,7 @@ int shook_py_emit_leave_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
 	if (ret == NULL) { \
 		py_print_err(); \
 		if (abort_on_error) { \
-			abort(); \
+			return SHOOK_ABORT; \
 		} \
 	} else { \
 		Py_DECREF(ret); \

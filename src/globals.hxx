@@ -70,6 +70,10 @@ long shook_alloc_copy(pid_t pid, const void *data, size_t len);
 void shook_set_timer(ya_timer_t *timer, ya_tick_diff_t milli_seconds);
 void shook_cancel_timer(ya_timer_t *timer);
 
+enum {
+	SHOOK_ABORT = -1,
+};
+
 #define SHOOK_PROCESS_ENUM \
 	SHOOK_PROCESS_DECL(UNKNOWN) \
 	SHOOK_PROCESS_DECL(CREATED) \

@@ -76,6 +76,11 @@ struct tcb_t
 
 static const unsigned int syscall_trap_sig = SIGTRAP | 0x80;
 
+enum {
+	ABORT_STATE_NONE,
+	ABORT_STATE_STARTED,
+};
+
 struct gstate_t
 {
 	std::unordered_map<pid_t, tcb_t> tcb;
@@ -83,6 +88,7 @@ struct gstate_t
 	ya_tick_t now;
 	int signalfd = -1;
 	bool enable_vdso = false;
+	bool aborted = false;
 
 	unw_addr_space_t unw_addr_space;
 };
@@ -90,9 +96,38 @@ struct gstate_t
 static gstate_t gstate;
 static bool abort_on_python_exception = false;
 
+static void shook_abort()
+{
+	LOG(LOG_INFO, "abort");
+	if (!gstate.aborted) {
+		gstate.aborted = true;
+		for (auto &it: gstate.tcb) {
+			kill(it.second.pid, SIGTERM);
+		}
+	}
+}
+
+#define CHECK_ABORT(action) do { \
+	if (action == SHOOK_ABORT) { \
+		shook_abort(); \
+		return; \
+	} \
+} while (0)
+
+static void emit_process(pid_t pid, unsigned int process_type, int ppid)
+{
+	if (gstate.aborted) {
+		return;
+	}
+
+	int action = shook_py_emit_process(abort_on_python_exception, pid, process_type, ppid);
+	CHECK_ABORT(action);
+}
+
 static void detached(tcb_t &tcb)
 {
-	shook_py_emit_process(abort_on_python_exception, tcb.pid, SHOOK_PROCESS_DETACHED, 0);
+	emit_process(tcb.pid, SHOOK_PROCESS_DETACHED, 0);
+
 	if (tcb.unw_info) {
 		_UPT_destroy(tcb.unw_info);
 	}
@@ -179,7 +214,11 @@ static void trace_new_proc(pid_t pid, unsigned int type, pid_t create_pid)
 {
 	DBG("trace_new_proc pid=%d, type=%d, creator=%d", pid, type, create_pid);
 	gstate.tcb.emplace(pid, tcb_t(pid, type, create_pid));
-	shook_py_emit_process(abort_on_python_exception, pid, type, create_pid);
+	if (gstate.aborted) {
+		kill(pid, SIGTERM);
+		return;
+	}
+	emit_process(pid, type, create_pid);
 }
 
 static void update_proc(tcb_t &tcb, pid_t pid, unsigned int type, pid_t create_pid)
@@ -187,7 +226,7 @@ static void update_proc(tcb_t &tcb, pid_t pid, unsigned int type, pid_t create_p
 	if (tcb.process_type == SHOOK_PROCESS_UNKNOWN) {
 		tcb.process_type = type;
 		tcb.create_pid = pid;
-		shook_py_emit_process(abort_on_python_exception, pid, type, create_pid);
+		emit_process(pid, type, create_pid);
 	} else if (tcb.process_type != type) {
 		LOG(LOG_WARN, "update_proc pid=%d, old_type=%d, type=%d, creator=%d",
 				pid, tcb.process_type, type, create_pid);
@@ -233,7 +272,13 @@ static void check_new_process_return(pid_t pid, tcb_t &tcb, context_t &ctx)
 
 static void emit_enter_signal(pid_t pid, tcb_t &tcb)
 {
+	if (gstate.aborted) {
+		return;
+	}
+
 	int action = shook_py_emit_enter_signal(abort_on_python_exception, pid, tcb.context);
+	CHECK_ABORT(action);
+
 	if (action == SHOOK_ACTION_SUSPEND) {
 		VERB("<- suspend pid=%d", pid);
 		return;
@@ -256,7 +301,13 @@ static void emit_enter_signal(pid_t pid, tcb_t &tcb)
 
 static void emit_enter_syscall(pid_t pid, tcb_t &tcb)
 {
+	if (gstate.aborted) {
+		return;
+	}
+
 	int action = shook_py_emit_enter_syscall(abort_on_python_exception, pid, tcb.context);
+	CHECK_ABORT(action);
+
 	VERB("-> pid=%d %s", pid, action_name[action]);
 
 	if (action == SHOOK_ACTION_SUSPEND) {
@@ -303,11 +354,17 @@ static void emit_enter_syscall(pid_t pid, tcb_t &tcb)
 
 static void emit_leave_syscall(pid_t pid, tcb_t &tcb)
 {
+	if (gstate.aborted) {
+		return;
+	}
+
 	if (!gstate.enable_vdso && tcb.context.scno == SYS_execve && tcb.context.retval == 0) {
 		shook_disable_vdso(pid, tcb.regs.rsp);
 	}
 
 	int action = shook_py_emit_leave_syscall(abort_on_python_exception, pid, tcb.context);
+	CHECK_ABORT(action);
+
 	VERB("<- pid=%d %s", pid, action_name[action]);
 	if (action == SHOOK_ACTION_SUSPEND) {
 		DBG("<- Action suspend pid=%d", pid);
@@ -385,7 +442,7 @@ static void on_syscall(pid_t pid, tcb_t &tcb, ya_tick_t now)
 	}
 }
 
-static uint32_t g_trace_flags = PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACEEXEC |
+static const uint32_t g_trace_flags = PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACEEXEC |
 PTRACE_O_TRACECLONE |
 PTRACE_O_TRACEFORK |
 PTRACE_O_TRACEVFORK;
