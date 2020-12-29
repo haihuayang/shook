@@ -13,6 +13,18 @@ def dissect_execve(stracer, pid, retval, scno, *args):
 	else:
 		return ''
 
+def flags_to_name(vn, flags):
+	names = []
+	for v, n in vn:
+		if flags == 0:
+			break
+		if flags & v:
+			flags &= ~v
+			names.append(n)
+	if flags:
+		names.append('0x%x' % flags)
+	return '|'.join(names)
+
 def open_flags_mode_to_string(flags, mode):
 	open_flags = (
 		( os.O_APPEND, 'O_APPEND' ),
@@ -147,7 +159,7 @@ def dissect_socket(stracer, pid, retval, scno, *args):
 			socktype_name = 'SOCK_%d' % socktype_low
 		socktype_high = (socktype & 0xfffffff0)
 		if socktype_high != 0:
-			socktype_name = socktype_name + '-0x%x' % socktype_high
+			socktype_name = socktype_name + '|0x%x' % socktype_high
 		return '%s, %s, %d' % (domain_name, socktype_name, protocol)
 	else:
 		return ''
@@ -198,7 +210,16 @@ def dissect_recvfrom(stracer, pid, retval, scno, *args):
 def dissect_recvmsg(stracer, pid, retval, scno, *args):
 	if retval is None:
 		sockfd, msghdr, flags = args
-		return '%d, 0x%x, 0x%x' % (sockfd, msghdr, flags)
+		flags_name = (
+			(socket.MSG_PEEK, 'PEEK'),
+			(socket.MSG_TRUNC, 'TRUNC'),
+			(socket.MSG_OOB, 'OOB'),
+			(socket.MSG_WAITALL, 'WAITALL'),
+			(socket.MSG_CMSG_CLOEXEC, 'CMSG_CLOEXEC'),
+			(socket.MSG_DONTWAIT, 'DONTWAIT'),
+			(socket.MSG_ERRQUEUE, 'ERRQUEUE'),
+		)
+		return '%d, 0x%x, %s' % (sockfd, msghdr, flags_to_name(flags_name, flags))
 	elif retval >= 0:
 		sockfd, msghdr, flags = args
 		msg_name, msg_namelen, msg_iov, msg_iovlen, msg_control, msg_controllen, msg_flags = shook.peek_msghdr(pid, msghdr, 1)[0]
