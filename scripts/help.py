@@ -2,6 +2,8 @@
 
 from __future__ import print_function
 
+print("sys.path", sys.path)
 help(shook)
 
+print("globals", globals())
 

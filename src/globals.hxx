@@ -17,6 +17,9 @@
 
 #include "timer.h"
 
+#define STR_1(x) #x
+#define STR(x) STR_1(x)
+
 #ifdef __cplusplus
 extern "C" {
 #endif

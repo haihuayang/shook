@@ -942,7 +942,7 @@ sys.stdout = ShookFile(1)
 sys.stderr = ShookFile(2)
 )EOF";
 
-#define MODULE_NAME "shook"
+#define MODULE_NAME STR(PROJECT)
 #ifdef IS_PY3K
 static struct PyModuleDef moduledef = {
 	PyModuleDef_HEAD_INIT,
@@ -962,6 +962,32 @@ PyMODINIT_FUNC init_module (void)
 	return PyModule_Create(&moduledef);
 }
 #endif
+
+static std::string get_python_dir()
+{
+	const char *env_lib_path = getenv("SHOOK_LIB_PATH");
+	if (env_lib_path) {
+		return env_lib_path;
+	}
+	char buf[PATH_MAX + 1];
+	ssize_t ret = readlink("/proc/self/exe", buf, PATH_MAX);
+	assert(ret > 0);
+	buf[ret] = '\0';
+	char *sep = strrchr(buf, '/');
+	if (!sep) {
+		return "";
+	}
+	*sep = '\0';
+	sep = strrchr(buf, '/');
+	if (!sep) {
+		return "";
+	}
+
+	*sep = '\0';
+	std::string path = buf;
+	path += "/share/" MODULE_NAME "/scripts";
+	return path;
+}
 
 int py_init(const char *pymod_name,
 		int script_argc, char **script_argv)
@@ -991,6 +1017,18 @@ int py_init(const char *pymod_name,
 	result = PyRun_SimpleString(init_script);
 	if (result < 0) {
 		return -1;
+	}
+
+	std::string python_dir = get_python_dir();
+	if (python_dir.size()) {
+		DBG("add python path %s", python_dir.c_str());
+		std::string script = "sys.path.append('";
+		script += python_dir;
+		script += "')";
+		result = PyRun_SimpleString(script.c_str());
+		if (result < 0) {
+			return -1;
+		}
 	}
 
 #define SHOOK_EVENT_DECL(x) PyModule_AddIntConstant(mod_this, "EVENT_"#x, SHOOK_EVENT_##x);

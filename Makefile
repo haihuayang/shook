@@ -60,3 +60,9 @@ $(TARGET_SET_dir:%=$(TARGET_DIR_out)/%): %:
 clean:
 	rm -rf $(TARGET_DIR_out)
 
+SCRIPTS := stracer.py netlink.py shook_utils.py
+DESTDIR ?= /usr/local
+install: all
+	install -d $(DESTDIR)/bin/ $(DESTDIR)/share/shook/scripts
+	install -m 755 $(TARGET_DIR_out)/bin/shook $(DESTDIR)/bin/
+	install -m 644 $(SCRIPTS:%=scripts/%) $(DESTDIR)/share/shook/scripts 
