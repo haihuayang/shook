@@ -89,6 +89,8 @@ struct gstate_t
 	int signalfd = -1;
 	bool enable_vdso = false;
 	bool aborted = false;
+	pid_t start_pid = -1;
+	unsigned int exit_code = 0;
 
 	unw_addr_space_t unw_addr_space;
 };
@@ -124,8 +126,12 @@ static void emit_process(pid_t pid, unsigned int process_type, int ppid)
 	CHECK_ABORT(action);
 }
 
-static void detached(tcb_t &tcb)
+static void detached(tcb_t &tcb, unsigned int exit_code)
 {
+	if (tcb.pid == gstate.start_pid) {
+		gstate.exit_code = exit_code;
+	}
+
 	emit_process(tcb.pid, SHOOK_PROCESS_DETACHED, 0);
 
 	if (tcb.unw_info) {
@@ -150,7 +156,8 @@ static void check_pid_changed(tcb_t &tcb, pid_t pid)
 	// TODO terminal current syscall in pid's tcb
 
 	tcb.flags = it_tcb->second.flags;
-	detached(tcb);
+	// we do not have exit_code, just use 0
+	detached(tcb, 0);
 }
 
 static const int arg_offsets[] = {
@@ -394,6 +401,11 @@ static void emit_leave_syscall(pid_t pid, tcb_t &tcb)
 	tcb.state = STATE_NONE;
 }
 
+static void terminate(void)
+{
+	exit(gstate.exit_code);
+}
+
 static void resume(tcb_t &tcb)
 {
 	if (tcb.state == STATE_ENTER_SYSCALL) {
@@ -469,13 +481,13 @@ static void trace(pid_t pid, unsigned int status, tcb_t &tcb, ya_tick_t now)
 
 	if (WIFSIGNALED(status)) {
 		DBG("pid %d killed %d", pid, status);
-		detached(tcb);
+		detached(tcb, 128 + WTERMSIG(status));
 		return;
 	}
 
 	if (WIFEXITED(status)) {
-		DBG("pid %d exited", pid);
-		detached(tcb);
+		DBG("pid %d exited %d", pid, status);
+		detached(tcb, WEXITSTATUS(status));
 		return;
 	}
 
@@ -544,9 +556,9 @@ static void trace(pid_t pid, unsigned int status, tcb_t &tcb, ya_tick_t now)
 	if (ptrace(PTRACE_GETREGS, pid, 0, &tcb.regs) == -1) {
 		if (errno == ESRCH) {
 			DBG("pid %d exit %lld", pid, tcb.regs.rdi);
-			detached(tcb);
+			detached(tcb, tcb.regs.rdi);
 			if (gstate.tcb.empty()) {
-				exit(0);
+				terminate();
 			}
 		} else {
 			FATAL("%s", strerror(errno));
@@ -683,6 +695,7 @@ static int run_shook(int start_pid, int pid_attach,
 	}
 
 	shook_py_emit_finish(abort_on_python_exception);
+	terminate();
 	return 0;
 }
 
@@ -842,6 +855,7 @@ int main(int argc, char **argv)
 				execvp(argv[0], argv);
 				FATAL("%s", strerror(errno));
 			}
+			gstate.start_pid = start_pid;
 		}
 		return run_shook(start_pid, pid_attach, script_argc, script_argv);
 	}
