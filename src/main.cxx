@@ -601,7 +601,7 @@ static int create_signalfd()
         return signalfd(-1, &mask, SFD_CLOEXEC);
 }
 
-static int run_shook(int start_pid, int pid_attach,
+static int run_shook(int start_pid, const std::vector<int> &pid_attach,
 		int argc, char **argv)
 {
 	init_unwind();
@@ -617,14 +617,17 @@ static int run_shook(int start_pid, int pid_attach,
 		}
 	}
 
-	trace_new_proc(start_pid, SHOOK_PROCESS_CREATED, 0);
-	if (pid_attach != -1) {
-		int err = ptrace(PTRACE_ATTACH, pid_attach, 0, 0);
+	if (start_pid > 0) {
+		trace_new_proc(start_pid, SHOOK_PROCESS_CREATED, 0);
+	}
+
+	for (auto pid: pid_attach) {
+		int err = ptrace(PTRACE_ATTACH, pid, 0, 0);
 		assert(err == 0);
 		if (!gstate.enable_vdso) {
-			shook_disable_vdso(pid_attach, 0);
+			shook_disable_vdso(pid, 0);
 		}
-		trace_new_proc(pid_attach, SHOOK_PROCESS_ATTACHED, 0);
+		trace_new_proc(pid, SHOOK_PROCESS_ATTACHED, 0);
 	}
 	gstate.now = ya_get_tick();
 #define MAX_POLL_WAIT_TIME (0xfffffff)
@@ -701,7 +704,8 @@ static int run_shook(int start_pid, int pid_attach,
 
 static void usage()
 {
-	fprintf(stderr, R"EOF(Usage: shook [-o output] [-bg] [-enable-vdso] [-p pid] -x script ... -- [command ...]
+	fprintf(stderr, R"EOF(
+Usage: shook [-o output] [-bg] [-enable-vdso] [-p pid] -x script ... [-- command ...]
 	-o file		output to file, default stderr
 	-bg		run shook in background
 	-enable-vdso	not intercept vdso functions
@@ -712,10 +716,16 @@ static void usage()
 	exit(1);
 }
 
+#define USAGE(fmt, ...) do { \
+	fprintf(stderr, fmt, ##__VA_ARGS__); \
+	usage(); \
+} while (0)
+
 #define NEXT_ARG(a) ({ \
+	const char *option = *a; \
 	++(a); \
 	if (*(a) == NULL) { \
-		usage(); \
+		USAGE("Error: Option %s requires value.", option); \
 	} \
 	*(a); \
 })
@@ -729,7 +739,7 @@ int main(int argc, char **argv)
 
 	const char *output = nullptr;
 	unsigned int loglevel = LOG_INFO;
-	int pid_attach = -1;
+	std::vector<int> pid_attach;
 	bool background = false;
 	bool dosleep = false;
 	for ( ; *argv; ++argv) {
@@ -740,20 +750,35 @@ int main(int argc, char **argv)
 			script_argv = argv;
 			++argv;
 			for ( ; ; ++argv) {
-				if (!*argv) {
-					usage();
-				}
-				if (strcmp(*argv, "--") == 0) {
+				if (!*argv || strcmp(*argv, "--") == 0) {
 					break;
 				}
 			}
 			script_argc = argv - script_argv;
+			if (!*argv) {
+				break;
+			}
 		} else if (strcmp(*argv, "-o") == 0) {
 			output = NEXT_ARG(argv);
 		} else if (strcmp(*argv, "-loglevel") == 0) {
 			loglevel = atoi(NEXT_ARG(argv));
 		} else if (strcmp(*argv, "-p") == 0) {
-			pid_attach = atoi(NEXT_ARG(argv));
+			int pid = atoi(NEXT_ARG(argv));
+			if (pid <= 0) {
+				USAGE("Error: Invalid attach pid %d.", pid);
+			}
+			bool exists = false;
+			for (auto _pid: pid_attach) {
+				if (_pid == pid) {
+					exists = true;
+					break;
+				}
+			}
+			if (exists) {
+				fprintf(stderr, "Warning: attach pid %d exists, ignore", pid);
+			} else {
+				pid_attach.push_back(pid);
+			}
 		} else if (strcmp(*argv, "-bg") == 0) {
 			background = true;
 		} else if (strcmp(*argv, "-enable-vdso") == 0) {
@@ -763,14 +788,14 @@ int main(int argc, char **argv)
 		} else if (strcmp(*argv, "-sleep") == 0) {
 			dosleep = true;
 		} else if (**argv == '-') {
-			usage();
+			USAGE("Unknown option %s.", *argv);
 		} else {
 			break;
 		}
 	}
 
-	if (!*argv && pid_attach == -1) {
-		usage();
+	if (!*argv && pid_attach.empty()) {
+		USAGE("Error: must attach or start new process.");
 	}
 
 	if (!shook_output_init(output, loglevel)) {
@@ -780,6 +805,9 @@ int main(int argc, char **argv)
 
 	int this_pid = getpid();
 	if (background) {
+		if (!*argv) {
+			USAGE("Error: background requires command line to start new process");
+		}
 		int sockets[2];
 		int err = socketpair(AF_LOCAL, SOCK_SEQPACKET, 0, sockets);
 		assert(err == 0);
