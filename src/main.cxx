@@ -21,12 +21,23 @@
 #include "timerq.h"
 #include "utils.h"
 
-static unsigned int g_syscall_argc[] = {
-#define X(s, argc, r, p) argc,
+static const struct {
+	const char *name;
+	int argc;
+} g_syscalls[] = {
+#define X(s, argc, r, p) { #s, argc, },
 #include "syscallent.h"
 #undef X
 };
 
+static const char *syscall_name(unsigned long scno)
+{
+	if (scno < sizeof(g_syscalls) / sizeof(g_syscalls[0])) {
+		return g_syscalls[scno].name;
+	} else {
+		return "INVALID";
+	}
+}
 
 static const char * const action_name[] = {
 #define SHOOK_ACTION_DECL(x) #x,
@@ -41,6 +52,7 @@ enum {
 	FLAG_SUSPEND = 8,
 	FLAG_BYPASS = 0x10,
 	FLAG_GDB = 0x20,
+	FLAG_DETACHING = 0x40,
 };
 
 enum tcb_state_t {
@@ -98,14 +110,53 @@ struct gstate_t
 static gstate_t gstate;
 static bool abort_on_python_exception = false;
 
+static void detached(tcb_t &tcb, unsigned int exit_code);
+
+static int detach(pid_t pid)
+{
+	auto it = gstate.tcb.find(pid);
+	if (it == gstate.tcb.end()) {
+		return -2;
+	} else if (it->second.flags & FLAG_DETACHING) {
+		LOG(LOG_WARN, "pid %d is already in detaching", pid);
+	} else {
+		DBG("detaching %d", pid);
+		it->second.flags |= FLAG_DETACHING;
+		int err = ptrace(PTRACE_DETACH, pid, 0, 0);
+		if (err == 0) {
+			detached(it->second, 0);
+			return err;
+		}
+		assert(errno == ESRCH);
+		err = ptrace(PTRACE_INTERRUPT, pid, 0, 0);
+		assert(err == 0);
+	}
+	return 0;
+}
+
+static void exit_detach(tcb_t &tcb)
+{
+	if (tcb.process_type == SHOOK_PROCESS_ATTACHED) {
+		detach(tcb.pid);
+	} else if (tcb.process_type != SHOOK_PROCESS_DETACHED) {
+		DBG("killing %d\n", tcb.pid);
+		kill(tcb.pid, SIGTERM);
+	}
+}
+
+static void exiting()
+{
+	for (auto &it: gstate.tcb) {
+		exit_detach(it.second);
+	}
+}
+
 static void shook_abort()
 {
 	LOG(LOG_INFO, "abort");
 	if (!gstate.aborted) {
 		gstate.aborted = true;
-		for (auto &it: gstate.tcb) {
-			kill(it.second.pid, SIGTERM);
-		}
+		exiting();
 	}
 }
 
@@ -179,18 +230,6 @@ static void set_argument(const struct user_regs_struct *regs, unsigned int index
 	*(long *)((const char *)regs + arg_offsets[index]) = val;
 }
 
-static int detach(pid_t pid)
-{
-	auto it = gstate.tcb.find(pid);
-	if (it == gstate.tcb.end()) {
-		return -2;
-	} else {
-		int err = ptrace(PTRACE_DETACH, pid, 0, 0);
-		assert(err == 0);
-		return err;
-	}
-}
-
 static void gdb(pid_t pid)
 {
 	// TODO should send CONT to other process?
@@ -220,9 +259,9 @@ static void gdb(pid_t pid)
 static void trace_new_proc(pid_t pid, unsigned int type, pid_t create_pid)
 {
 	DBG("trace_new_proc pid=%d, type=%d, creator=%d", pid, type, create_pid);
-	gstate.tcb.emplace(pid, tcb_t(pid, type, create_pid));
+	const auto &ret = gstate.tcb.emplace(pid, tcb_t(pid, type, create_pid));
 	if (gstate.aborted) {
-		kill(pid, SIGTERM);
+		exit_detach(ret.first->second);
 		return;
 	}
 	emit_process(pid, type, create_pid);
@@ -427,14 +466,30 @@ static void resume(tcb_t &tcb)
 
 static void on_syscall(pid_t pid, tcb_t &tcb, ya_tick_t now)
 {
+	VERB("pid %d flags x%x orig_rax %lld %s rax %lld, %ld %ld %ld %ld %ld %ld",
+			pid, tcb.flags, tcb.regs.orig_rax,
+			syscall_name(tcb.regs.orig_rax),
+			tcb.regs.rax,
+			get_argument(&tcb.regs, 0),
+			get_argument(&tcb.regs, 1),
+			get_argument(&tcb.regs, 2),
+			get_argument(&tcb.regs, 3),
+			get_argument(&tcb.regs, 4),
+			get_argument(&tcb.regs, 5));
+
 	tcb.context.modified = false;
 
 	if ((tcb.flags & FLAG_ENTERING) != 0) {
 		assert((tcb.flags & FLAG_BYPASS) == 0);
+		if (long(tcb.regs.orig_rax) < 0) {
+			LOG(LOG_WARN, "Invalid orig_rax %lld pid %d",
+					tcb.regs.orig_rax, pid);
+			return;
+		}
 		tcb.last_syscall = tcb.regs.orig_rax;
 		tcb.context.action = SHOOK_ACTION_NONE;
 		tcb.context.scno = tcb.regs.orig_rax;
-		tcb.context.argc = g_syscall_argc[tcb.regs.orig_rax];
+		tcb.context.argc = g_syscalls[tcb.regs.orig_rax].argc;
 		for (unsigned int i = 0; i < tcb.context.argc; ++i) {
 			tcb.context.args[i] = get_argument(&tcb.regs, i);
 		}
@@ -512,14 +567,14 @@ static void trace(pid_t pid, unsigned int status, tcb_t &tcb, ya_tick_t now)
 		}
 	}
 
-	if (event != 0) {
-		DBG("pid %d event %d event", pid, event);
-		goto restart_tracee;
-	}
-
 	if (tcb.flags & FLAG_STARTUP) {
 		tcb.flags &= ~FLAG_STARTUP;
 		ptrace(PTRACE_SETOPTIONS, pid, 0, g_trace_flags);
+	}
+
+	if (event != 0) {
+		DBG("pid %d event %d event", pid, event);
+		goto restart_tracee;
 	}
 
 	sig = WSTOPSIG(status);
@@ -571,7 +626,11 @@ static void trace(pid_t pid, unsigned int status, tcb_t &tcb, ya_tick_t now)
 	on_syscall(pid, tcb, now);
 	tcb.flags ^= FLAG_ENTERING;
 restart_tracee:
-	if ((tcb.flags & FLAG_SUSPEND) == 0) {
+	if (tcb.flags & FLAG_DETACHING) {
+		int err = ptrace(PTRACE_DETACH, pid, 0, 0);
+		assert(err == 0);
+		detached(tcb, 0);
+	} else if ((tcb.flags & FLAG_SUSPEND) == 0) {
 		/* Enter next system call */
 		if (ptrace(PTRACE_SYSCALL, pid, 0, tcb.restart_signo) == -1)
 			FATAL("%s", strerror(errno));
@@ -622,7 +681,14 @@ static int run_shook(int start_pid, const std::vector<int> &pid_attach,
 	}
 
 	for (auto pid: pid_attach) {
-		int err = ptrace(PTRACE_ATTACH, pid, 0, 0);
+		DBG("attaching %d", pid);
+		/* in detaching, it requires PTRACE_INTERRUPT to stop tracee,
+		 * have to use PTRACE_SEIZE becauase PTRACE_ATTACK does not allow
+		 * PTRACE_INTERRUPT
+		 */
+		int err = ptrace(PTRACE_SEIZE, pid, 0, 0);
+		assert(err == 0);
+		err = ptrace(PTRACE_INTERRUPT, pid, 0, 0);
 		assert(err == 0);
 		if (!gstate.enable_vdso) {
 			shook_disable_vdso(pid, 0);
@@ -686,9 +752,8 @@ static int run_shook(int start_pid, const std::vector<int> &pid_attach,
 				if (si.ssi_signo == SIGCHLD) {
 					continue;
 				} else if (si.ssi_signo == SIGTERM || si.ssi_signo == SIGINT) {
-					for (auto &it: gstate.tcb) {
-						kill(it.first, SIGTERM);
-					}
+					LOG(LOG_INFO, "catch signal %d, exiting...", si.ssi_signo);
+					exiting();
 				} else {
 					fprintf (stderr, "Got some unhandled signal\n");
 					return 1;
