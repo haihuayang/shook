@@ -330,7 +330,7 @@ class Stracer(object):
 			self.output("<unfinished ...>\n")
 			self.last_pid = None
 	
-		self.output(pid, '+++  killed by', shook.signal_name(signo), ' +++')
+		self.output(pid, '+++  killed by', shook.signal_name(signo), ' +++\n')
 
 	def finish_hook(self):
 		if self.last_pid is not None:
