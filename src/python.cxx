@@ -1061,6 +1061,8 @@ int py_init(const char *pymod_name,
 		PyModule_AddObject(mod_this, symbol, po);
 	}
 
+	PyModule_AddObject(mod_this, "version", PyString_FromString(g_version));
+
 #define ADD_INT_PYOBJECT(x) \
 	PyModule_AddObject(mod_this, #x, PyInt_FromLong(x))
 

@@ -771,6 +771,7 @@ static void usage()
 {
 	fprintf(stderr, R"EOF(
 Usage: shook [-o output] [-bg] [-enable-vdso] [-p pid] -x script ... [-- command ...]
+	-version	report version and exit
 	-o file		output to file, default stderr
 	-bg		run shook in background
 	-enable-vdso	not intercept vdso functions
@@ -810,6 +811,10 @@ int main(int argc, char **argv)
 	for ( ; *argv; ++argv) {
 		if (false) {
 			/* placeholder */
+		} else if (strcmp(*argv, "-version") == 0) {
+			printf("shook %s %s %s\n",
+					g_version, g_git_commit, g_build_date);
+			return 0;
 		} else if (strcmp(*argv, "-x") == 0) {
 			NEXT_ARG(argv);
 			script_argv = argv;

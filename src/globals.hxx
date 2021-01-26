@@ -52,6 +52,10 @@ enum {
 	abort(); \
 } while (0)
 
+extern const char *g_version;
+extern const char *g_build_date;
+extern const char *g_git_commit;
+
 extern unsigned int loglevel;
 void shook_log(int level, const char *fmt, ...) __attribute__((format (printf, 2, 3)));
 void shook_write(int stream, const char *str);

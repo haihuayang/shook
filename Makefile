@@ -3,7 +3,9 @@ MAKEFLAGS += --no-builtin-rules
 .SUFFIXES:
 
 PROJECT := shook
-VERSION := 0.1
+VERSION := 0.2
+GIT_COMMIT := $(shell git describe --abbrev=0 --dirty --always --tags)
+BUILD_DATE := $(shell date '+%Y%m%d-%H%M%S')
 TARGET_ARCH := x86_64
 
 TARGET_PROJECT_CFLAGS := -g -Wall -DPROJECT=$(PROJECT) -DTARGET_ARCH_$(TARGET_ARCH)=1
@@ -29,18 +31,22 @@ TARGET_CFLAGS_EXTRA := \
 
 all: $(TARGET_SET_tests:%=$(TARGET_DIR_out)/tests/%) $(TARGET_DIR_out)/bin/$(PROJECT)
 
-TARGET_SET_src := main vdso \
+TARGET_SET_src := main version vdso \
 	python syscallent log timerq utils \
 
 $(TARGET_DIR_out)/bin/$(PROJECT): $(TARGET_SET_src:%=$(TARGET_DIR_out)/src/%.o) $(TARGET_SET_lib:%=$(TARGET_DIR_out)/lib%.a)
 	$(TARGET_CXX) -g $(TARGET_LDFLAGS) -o $@ $^ $(TARGET_PYTHON_LDFLAGS) -lunwind-x86_64 -lunwind-ptrace
 
+$(TARGET_DIR_out)/src/version.o: src/version.cxx
+	$(TARGET_CXX) -c $(TARGET_CXXFLAGS) $(TARGET_PYTHON_CFLAGS) -DVERSION=\"$(VERSION)\" -DGIT_COMMIT=\"$(GIT_COMMIT)\" -DBUILD_DATE=\"$(BUILD_DATE)\" -o $@ $<
+
+$(TARGET_DIR_out)/src/version.o: $(TARGET_SET_src:%=src/%.cxx)
+
 $(TARGET_DIR_out)/src/%.o: src/%.cxx | target_mkdir
 	$(TARGET_CXX) -c $(TARGET_CXXFLAGS) $(TARGET_PYTHON_CFLAGS) -o $@ $<
 
-#$(TARGET_SET_src:%=$(TARGET_DIR_out)/src/%.o): $(TARGET_DIR_out)/%.o: %.cxx | target_mkdir
-#	$(TARGET_CXX) -c $(TARGET_CXXFLAGS) $(TARGET_PYTHON_CFLAGS) -o $@ $<
-#
+$(TARGET_SET_src:%=$(TARGET_DIR_out)/src/%.o): Makefile
+
 $(TARGET_SET_tests:%=$(TARGET_DIR_out)/tests/%) : %: %.o $(TARGET_SET_lib:%=$(TARGET_DIR_out)/lib%.a) | target_mkdir
 	$(TARGET_CXX) -g $(TARGET_LDFLAGS) -o $@ $^ -lpthread -lresolv -ldl
 
