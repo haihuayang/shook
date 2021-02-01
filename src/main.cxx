@@ -53,6 +53,7 @@ enum {
 	FLAG_BYPASS = 0x10,
 	FLAG_GDB = 0x20,
 	FLAG_DETACHING = 0x40,
+	FLAG_CREATED = 0x80, // process is created by shook or child of process created by shook
 };
 
 enum tcb_state_t {
@@ -64,11 +65,12 @@ enum tcb_state_t {
 
 struct tcb_t
 {
-	tcb_t(pid_t pid_, unsigned int pt, unsigned ppid) : pid(pid_),
+	tcb_t(pid_t pid_, unsigned int pt, unsigned ppid, uint32_t flags) : pid(pid_),
+			flags(flags | FLAG_STARTUP | FLAG_ENTERING | FLAG_IGNORE_ONE_SIGSTOP),
 			process_type(pt), create_pid(ppid) {
 	}
 
-	pid_t pid;
+	const pid_t pid;
 	tcb_state_t state = STATE_NONE;
 	uint32_t flags = FLAG_STARTUP | FLAG_ENTERING | FLAG_IGNORE_ONE_SIGSTOP;
 	unsigned int process_type, create_pid;
@@ -95,7 +97,7 @@ enum {
 
 struct gstate_t
 {
-	std::unordered_map<pid_t, tcb_t> tcb;
+	std::unordered_map<pid_t, tcb_t> tcbs;
 	ya_timerq_t timerq;
 	ya_tick_t now;
 	int signalfd = -1;
@@ -114,8 +116,8 @@ static void detached(tcb_t &tcb, unsigned int exit_code);
 
 static int detach(pid_t pid)
 {
-	auto it = gstate.tcb.find(pid);
-	if (it == gstate.tcb.end()) {
+	auto it = gstate.tcbs.find(pid);
+	if (it == gstate.tcbs.end()) {
 		return -2;
 	} else if (it->second.flags & FLAG_DETACHING) {
 		LOG(LOG_WARN, "pid %d is already in detaching", pid);
@@ -136,17 +138,18 @@ static int detach(pid_t pid)
 
 static void exit_detach(tcb_t &tcb)
 {
-	if (tcb.process_type == SHOOK_PROCESS_ATTACHED) {
-		detach(tcb.pid);
-	} else if (tcb.process_type != SHOOK_PROCESS_DETACHED) {
+	uint32_t flags = tcb.flags & (FLAG_DETACHING | FLAG_CREATED);
+	if (flags == FLAG_CREATED) {
 		DBG("killing %d\n", tcb.pid);
 		kill(tcb.pid, SIGTERM);
+	} else if (flags == 0) {
+		detach(tcb.pid);
 	}
 }
 
 static void exiting()
 {
-	for (auto &it: gstate.tcb) {
+	for (auto &it: gstate.tcbs) {
 		exit_detach(it.second);
 	}
 }
@@ -188,7 +191,7 @@ static void detached(tcb_t &tcb, unsigned int exit_code)
 	if (tcb.unw_info) {
 		_UPT_destroy(tcb.unw_info);
 	}
-	gstate.tcb.erase(tcb.pid);
+	gstate.tcbs.erase(tcb.pid);
 }
 
 static void check_pid_changed(tcb_t &tcb, pid_t pid)
@@ -200,8 +203,8 @@ static void check_pid_changed(tcb_t &tcb, pid_t pid)
 	if (old_pid == (unsigned long)pid || old_pid > UINT_MAX)
 		return;
 
-	auto it_tcb = gstate.tcb.find(old_pid);
-	assert(it_tcb != gstate.tcb.end());
+	auto it_tcb = gstate.tcbs.find(old_pid);
+	assert(it_tcb != gstate.tcbs.end());
 
 	DBG("pid change from %ld to %d", old_pid, pid);
 	// TODO terminal current syscall in pid's tcb
@@ -256,10 +259,10 @@ static void gdb(pid_t pid)
 	assert(0);
 }
 
-static void trace_new_proc(pid_t pid, unsigned int type, pid_t create_pid)
+static void trace_new_proc(pid_t pid, unsigned int type, pid_t create_pid, uint32_t flags)
 {
 	DBG("trace_new_proc pid=%d, type=%d, creator=%d", pid, type, create_pid);
-	const auto &ret = gstate.tcb.emplace(pid, tcb_t(pid, type, create_pid));
+	const auto &ret = gstate.tcbs.emplace(pid, tcb_t(pid, type, create_pid, flags));
 	if (gstate.aborted) {
 		exit_detach(ret.first->second);
 		return;
@@ -267,11 +270,12 @@ static void trace_new_proc(pid_t pid, unsigned int type, pid_t create_pid)
 	emit_process(pid, type, create_pid);
 }
 
-static void update_proc(tcb_t &tcb, pid_t pid, unsigned int type, pid_t create_pid)
+static void update_proc(tcb_t &tcb, pid_t pid, unsigned int type, pid_t create_pid, uint32_t flags)
 {
 	if (tcb.process_type == SHOOK_PROCESS_UNKNOWN) {
 		tcb.process_type = type;
 		tcb.create_pid = pid;
+		tcb.flags |= flags;
 		emit_process(pid, type, create_pid);
 	} else if (tcb.process_type != type) {
 		LOG(LOG_WARN, "update_proc pid=%d, old_type=%d, type=%d, creator=%d",
@@ -305,11 +309,11 @@ static void check_new_process_return(pid_t pid, tcb_t &tcb, context_t &ctx)
 	if (tcb.new_proc_type != SHOOK_PROCESS_UNKNOWN) {
 		if (ctx.retval > 0) {
 			pid_t new_pid = ctx.retval;
-			auto new_it_tcb = gstate.tcb.find(new_pid);
-			if (new_it_tcb == gstate.tcb.end()) {
-				trace_new_proc(new_pid, tcb.new_proc_type, pid);
+			auto new_it_tcb = gstate.tcbs.find(new_pid);
+			if (new_it_tcb == gstate.tcbs.end()) {
+				trace_new_proc(new_pid, tcb.new_proc_type, pid, tcb.flags & FLAG_CREATED);
 			} else {
-				update_proc(new_it_tcb->second, new_pid, tcb.new_proc_type, pid);
+				update_proc(new_it_tcb->second, new_pid, tcb.new_proc_type, pid, tcb.flags & FLAG_CREATED);
 			}
 		}
 		tcb.new_proc_type = SHOOK_PROCESS_UNKNOWN;
@@ -554,11 +558,11 @@ static void trace(pid_t pid, unsigned int status, tcb_t &tcb, ya_tick_t now)
 		unsigned int type = (event == PTRACE_EVENT_CLONE) ? SHOOK_PROCESS_CLONE : 
 			(event == PTRACE_EVENT_FORK) ? SHOOK_PROCESS_FORK : SHOOK_PROCESS_VFORK;
 		DBG("event %d pid %d new_pid %ld", event, pid, new_pid);
-		auto new_it_tcb = gstate.tcb.find(new_pid);
-		if (new_it_tcb == gstate.tcb.end()) {
-			trace_new_proc(new_pid, type, pid);
+		auto new_it_tcb = gstate.tcbs.find(new_pid);
+		if (new_it_tcb == gstate.tcbs.end()) {
+			trace_new_proc(new_pid, type, pid, tcb.flags & FLAG_CREATED);
 		} else {
-			update_proc(new_it_tcb->second, new_pid, type, pid);
+			update_proc(new_it_tcb->second, new_pid, type, pid, tcb.flags & FLAG_CREATED);
 			if (new_it_tcb->second.save_status != 0) {
 				/* trigger the saved event for new_pid */
 				trace(new_pid, new_it_tcb->second.save_status, new_it_tcb->second, now);
@@ -612,7 +616,7 @@ static void trace(pid_t pid, unsigned int status, tcb_t &tcb, ya_tick_t now)
 		if (errno == ESRCH) {
 			DBG("pid %d exit %lld", pid, tcb.regs.rdi);
 			detached(tcb, tcb.regs.rdi);
-			if (gstate.tcb.empty()) {
+			if (gstate.tcbs.empty()) {
 				terminate();
 			}
 		} else {
@@ -677,7 +681,7 @@ static int run_shook(int start_pid, const std::vector<int> &pid_attach,
 	}
 
 	if (start_pid > 0) {
-		trace_new_proc(start_pid, SHOOK_PROCESS_CREATED, 0);
+		trace_new_proc(start_pid, SHOOK_PROCESS_CREATED, 0, FLAG_CREATED);
 	}
 
 	for (auto pid: pid_attach) {
@@ -693,11 +697,11 @@ static int run_shook(int start_pid, const std::vector<int> &pid_attach,
 		if (!gstate.enable_vdso) {
 			shook_disable_vdso(pid, 0);
 		}
-		trace_new_proc(pid, SHOOK_PROCESS_ATTACHED, 0);
+		trace_new_proc(pid, SHOOK_PROCESS_ATTACHED, 0, 0);
 	}
 	gstate.now = ya_get_tick();
 #define MAX_POLL_WAIT_TIME (0xfffffff)
-	while (!gstate.tcb.empty()) {
+	while (!gstate.tcbs.empty()) {
 		int status;
 		pid_t pid = wait4(-1, &status, WNOHANG | __WALL, NULL);
 		if (pid == -1) {
@@ -709,12 +713,12 @@ static int run_shook(int start_pid, const std::vector<int> &pid_attach,
 			VERB("pid %d status=%d,0x%x, signal=%d", pid, status, status, WSTOPSIG(status));
 
 			// tcb_t &tcb = find_or_create_tcb(pid);
-			auto it_tcb = gstate.tcb.find(pid);
-			if (it_tcb == gstate.tcb.end()) {
+			auto it_tcb = gstate.tcbs.find(pid);
+			if (it_tcb == gstate.tcbs.end()) {
 				// Child process signaled before the parent process,
 				// suspend the process until the event about how it is created
 				DBG("pid %d not found", pid);
-				auto ret = gstate.tcb.emplace(pid, tcb_t(pid, SHOOK_PROCESS_UNKNOWN, -1));
+				auto ret = gstate.tcbs.emplace(pid, tcb_t(pid, SHOOK_PROCESS_UNKNOWN, -1, 0));
 				assert(ret.second);
 				ret.first->second.save_status = status;
 				continue;
@@ -977,8 +981,8 @@ void shook_set_timer(ya_timer_t *timer, ya_tick_diff_t intval)
 
 int shook_resume(pid_t pid)
 {
-	auto it = gstate.tcb.find(pid);
-	if (it == gstate.tcb.end()) {
+	auto it = gstate.tcbs.find(pid);
+	if (it == gstate.tcbs.end()) {
 		return -2;
 	} else {
 		resume(it->second);
@@ -989,8 +993,8 @@ int shook_resume(pid_t pid)
 /* expand tracee's stack and copy data to stack, NOTE, len should not be large */
 long shook_alloc_stack(pid_t pid, size_t len)
 {
-	auto it = gstate.tcb.find(pid);
-	TODO_assert(it != gstate.tcb.end());
+	auto it = gstate.tcbs.find(pid);
+	TODO_assert(it != gstate.tcbs.end());
 
 	tcb_t &tcb = it->second;
 	tcb.tmp_mem_addr -= ((len + 15) & ~15);
@@ -1007,8 +1011,8 @@ long shook_alloc_copy(pid_t pid, const void *data, size_t len)
 
 int shook_backtrace(std::vector<stackframe_t> &stacks, pid_t pid, unsigned int depth)
 {
-	auto it = gstate.tcb.find(pid);
-	TODO_assert(it != gstate.tcb.end());
+	auto it = gstate.tcbs.find(pid);
+	TODO_assert(it != gstate.tcbs.end());
 
 	tcb_t &tcb = it->second;
 	if (!tcb.unw_info) {
@@ -1042,9 +1046,9 @@ int shook_backtrace(std::vector<stackframe_t> &stacks, pid_t pid, unsigned int d
 
 int shook_set_gdb(pid_t pid)
 {
-	auto it = gstate.tcb.find(pid);
-	TODO_assert(it != gstate.tcb.end());
-	if (it == gstate.tcb.end()) {
+	auto it = gstate.tcbs.find(pid);
+	TODO_assert(it != gstate.tcbs.end());
+	if (it == gstate.tcbs.end()) {
 		return -ENOENT;
 	}
 	tcb_t &tcb = it->second;
