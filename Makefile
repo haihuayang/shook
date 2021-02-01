@@ -22,7 +22,7 @@ TARGET_DIR_out := target.dbg.linux.$(TARGET_ARCH)
 TARGET_SET_dir := bin src tests
 
 .PHONY: all target_mkdir
-TARGET_SET_tests := time getifaddrs
+TARGET_SET_tests := time getifaddrs thread
 
 TARGET_SET_lib := 
 

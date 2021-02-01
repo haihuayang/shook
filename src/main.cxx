@@ -7,6 +7,7 @@
 
 #include <stdarg.h>
 #include <fcntl.h>
+#include <dirent.h>
 
 #include <syscall.h>
 #include <sys/user.h>
@@ -698,6 +699,34 @@ static int run_shook(int start_pid, const std::vector<int> &pid_attach,
 			shook_disable_vdso(pid, 0);
 		}
 		trace_new_proc(pid, SHOOK_PROCESS_ATTACHED, 0, 0);
+
+		char proc_buf[80];
+		snprintf(proc_buf, sizeof proc_buf, "/proc/%d/task", pid);
+		DIR *dir = opendir(proc_buf);
+		if (!dir) {
+			continue;
+		}
+		struct dirent *de;
+		while ((de = readdir(dir)) != NULL) {
+			char *end;
+			pid_t tpid = strtoul(de->d_name, &end, 0);
+			if (*end) {
+				continue;
+			}
+			if (tpid == pid || tpid <= 0) {
+				continue;
+			}
+			err = ptrace(PTRACE_SEIZE, tpid, 0, 0);
+			if (err != 0) {
+				LOG(LOG_WARN, "failed to seize thread %d of %d, errno = %d",
+						tpid, pid, errno);
+				continue;
+			}
+			err = ptrace(PTRACE_INTERRUPT, tpid, 0, 0);
+			assert(err == 0);
+			trace_new_proc(tpid, SHOOK_PROCESS_CLONE, pid, 0);
+		}
+		closedir(dir);
 	}
 	gstate.now = ya_get_tick();
 #define MAX_POLL_WAIT_TIME (0xfffffff)

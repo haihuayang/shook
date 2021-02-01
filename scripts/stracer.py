@@ -306,31 +306,33 @@ class Stracer(object):
 			self.last_pid = None
 
 	def process_hook(self, pid, event, ppid):
+		now = datetime.now()
 		if self.last_pid is not None:
 			self.output("<unfinished ...>\n")
 			self.last_pid = None
 	
 		if event == shook.PROCESS_CREATED:
-			self.output(pid, "CREATED")
+			self.output(str_time(now), pid, "CREATED\n")
 		elif event == shook.PROCESS_ATTACHED:
-			self.output(pid, "ATTACHED")
+			self.output(str_time(now), pid, "ATTACHED\n")
 		elif event == shook.PROCESS_DETACHED:
-			self.output(pid, "DETACHED")
+			self.output(str_time(now), pid, "DETACHED\n")
 		elif event == shook.PROCESS_FORK:
-			self.output(pid, "FORK", 'by', ppid)
+			self.output(str_time(now), pid, "FORK by %d\n" % ppid)
 		elif event == shook.PROCESS_VFORK:
-			self.output(pid, "VFORK", 'by', ppid)
+			self.output(str_time(now), pid, "VFORK by %d\n" % ppid)
 		elif event == shook.PROCESS_CLONE:
-			self.output(pid, "CLONE", 'by', ppid)
+			self.output(str_time(now), pid, "CLONE by %d\n" % ppid)
 		else:
-			self.output(pid, "UNKNOWN", 'ppid', ppid)
+			self.output(str_time(now), pid, "UNKNOWN ppid=%d\n" % ppid)
 
 	def signal_hook(self, pid, signo):
+		now = datetime.now()
 		if self.last_pid is not None:
 			self.output("<unfinished ...>\n")
 			self.last_pid = None
 	
-		self.output(pid, '+++  killed by', shook.signal_name(signo), ' +++\n')
+		self.output(str_time(now), pid, '+++  killed by', shook.signal_name(signo), ' +++\n')
 
 	def finish_hook(self):
 		if self.last_pid is not None:
