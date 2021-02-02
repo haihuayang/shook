@@ -108,11 +108,12 @@ class TraceeMgmt__:
 		syscall_hooks.append(self.syscall_hook)
 		shook.register(shook.EVENT_SYSCALL, *syscall_hooks)
 
-		process_hooks = [ self.process_hook ]
+		process_hooks = [ ]
 		for handler in handlers:
 			hook = getattr(handler, "process_hook", None)
 			if hook:
 				process_hooks.append(hook)
+		process_hooks.append(self.process_hook)
 		shook.register(shook.EVENT_PROCESS, *process_hooks)
 		
 		signal_hooks = [ ]

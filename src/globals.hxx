@@ -173,7 +173,7 @@ struct context_t
 	std::vector<pyobj_t> stack;
 };
 
-int shook_py_emit_enter_signal(bool abort_on_error, pid_t pid, context_t &context);
+int shook_py_emit_leave_signal(bool abort_on_error, pid_t pid, context_t &context);
 int shook_py_emit_enter_syscall(bool abort_on_error, pid_t pid, context_t &context);
 int shook_py_emit_leave_syscall(bool abort_on_error, pid_t pid, context_t &context);
 int shook_py_emit_process(bool abort_on_error, pid_t pid, unsigned int process_type, int ppid);

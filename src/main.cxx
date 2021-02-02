@@ -61,7 +61,7 @@ enum tcb_state_t {
 	STATE_NONE,
 	STATE_ENTER_SYSCALL,
 	STATE_LEAVE_SYSCALL,
-	STATE_ENTER_SIGNAL,
+	STATE_LEAVE_SIGNAL,
 };
 
 struct tcb_t
@@ -321,13 +321,13 @@ static void check_new_process_return(pid_t pid, tcb_t &tcb, context_t &ctx)
 	}
 }
 
-static void emit_enter_signal(pid_t pid, tcb_t &tcb)
+static void emit_leave_signal(pid_t pid, tcb_t &tcb)
 {
 	if (gstate.aborted) {
 		return;
 	}
 
-	int action = shook_py_emit_enter_signal(abort_on_python_exception, pid, tcb.context);
+	int action = shook_py_emit_leave_signal(abort_on_python_exception, pid, tcb.context);
 	CHECK_ABORT(action);
 
 	if (action == SHOOK_ACTION_SUSPEND) {
@@ -335,10 +335,11 @@ static void emit_enter_signal(pid_t pid, tcb_t &tcb)
 		return;
 	}
 
-	if (action == SHOOK_ACTION_NONE) {
-	} else if (action == SHOOK_ACTION_REDIRECT) {
-		DBG("<- Action redirect pid=%d, signo=%d", pid, tcb.context.signo);
+	if (tcb.context.modified) {
 		tcb.restart_signo = tcb.context.signo;
+	}
+
+	if (action == SHOOK_ACTION_NONE) {
 	} else if (action == SHOOK_ACTION_DETACH) {
 		DBG("<- Action detach pid=%d", pid);
 		detach(pid);
@@ -456,8 +457,8 @@ static void resume(tcb_t &tcb)
 		emit_enter_syscall(tcb.pid, tcb);
 	} else if (tcb.state == STATE_LEAVE_SYSCALL) {
 		emit_leave_syscall(tcb.pid, tcb);
-	} else if (tcb.state == STATE_ENTER_SIGNAL) {
-		emit_enter_signal(tcb.pid, tcb);
+	} else if (tcb.state == STATE_LEAVE_SIGNAL) {
+		emit_leave_signal(tcb.pid, tcb);
 	} else {
 		assert(0);
 	}
@@ -604,11 +605,11 @@ static void trace(pid_t pid, unsigned int status, tcb_t &tcb, ya_tick_t now)
 			goto restart_tracee;
 			LOG(LOG_WARN, "Unexpected SIGTRAP");
 		}
-		tcb.state = STATE_ENTER_SIGNAL;
+		tcb.state = STATE_LEAVE_SIGNAL;
 		tcb.restart_signo = sig;
 		tcb.context.signo = sig;
-		tcb.context.signal_depth = 0;
-		emit_enter_signal(pid, tcb);
+		tcb.context.signal_depth = -1;
+		emit_leave_signal(pid, tcb);
 		goto restart_tracee;
 	}
 

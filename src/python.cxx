@@ -65,8 +65,7 @@ static void py_print_err(void)
 	SHOOK_EVENT_DECL(SYSCALL) \
 	SHOOK_EVENT_DECL(SIGNAL) \
 	SHOOK_EVENT_DECL(PROCESS) \
-	SHOOK_EVENT_DECL(FINISH) \
-	SHOOK_EVENT_DECL(EXIT)
+	SHOOK_EVENT_DECL(FINISH)
 
 enum {
 #define SHOOK_EVENT_DECL(x) SHOOK_EVENT_##x,
@@ -1114,16 +1113,19 @@ static PyObject *create_signal_args(pid_t pid, context_t &ctx)
 	return po_args;
 }
 
-int shook_py_emit_enter_signal(bool abort_on_error, pid_t pid, context_t &ctx)
+int shook_py_emit_leave_signal(bool abort_on_error, pid_t pid, context_t &ctx)
 {
 	int action = SHOOK_ACTION_NONE;
 	auto &observers = g_observers[SHOOK_EVENT_SIGNAL];
-	for (size_t i = ctx.signal_depth; i < observers.size(); ++i) {
+	if (ctx.signal_depth == -1) {
+		ctx.signal_depth = observers.size();
+	}
+	while (ctx.signal_depth-- > 0) {
 		if (ctx.last_args == nullptr) {
 			ctx.last_args = create_signal_args(pid, ctx);
 		}
 
-		pyobj_t po_ret(PyObject_Call(observers[i], ctx.last_args, NULL));
+		pyobj_t po_ret(PyObject_Call(observers[ctx.signal_depth], ctx.last_args, NULL));
 		if (!po_ret) {
 			py_print_err();
 			if (abort_on_error) {
@@ -1139,12 +1141,13 @@ int shook_py_emit_enter_signal(bool abort_on_error, pid_t pid, context_t &ctx)
 				continue;
 			}
 			action = PyInt_AsLong(PyTuple_GET_ITEM((PyObject *)po_ret, 0));
-			if (action == SHOOK_ACTION_BYPASS) {
-				TODO_assert(len == 1);
-				break;
-			} else if (action == SHOOK_ACTION_REDIRECT) {
+			if (action == SHOOK_ACTION_RETURN) {
 				TODO_assert(len == 2);
-				ctx.last_args = PyTuple_GET_ITEM((PyObject *)po_ret, 1);
+				PyObject *new_signo = PyTuple_GET_ITEM((PyObject *)po_ret, 1);
+				Py_XINCREF(new_signo);
+				PyObject *old_signo = PyTuple_GET_ITEM((PyObject *)ctx.last_args, 1);
+				PyTuple_SET_ITEM((PyObject *)ctx.last_args, 1, new_signo);
+				Py_XDECREF(old_signo);
 				ctx.modified = true;
 				action = SHOOK_ACTION_NONE;
 			} else if (action == SHOOK_ACTION_GDB || action == SHOOK_ACTION_DETACH) {
@@ -1157,6 +1160,9 @@ int shook_py_emit_enter_signal(bool abort_on_error, pid_t pid, context_t &ctx)
 			}
 
 		}
+	}
+	if (ctx.modified) {
+		ctx.signo = PyInt_AsLong(PyTuple_GET_ITEM((PyObject *)ctx.last_args, 1));
 	}
 	ctx.last_args = nullptr;
 	return action;
@@ -1316,7 +1322,8 @@ int shook_py_emit_leave_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
 
 int shook_py_emit_process(bool abort_on_error, pid_t pid, unsigned int pt, int ppid)
 {
-	if (g_observers[SHOOK_EVENT_PROCESS].empty()) {
+	auto &observers = g_observers[SHOOK_EVENT_PROCESS];
+	if (observers.empty()) {
 		return 0;
 	}
 
@@ -1324,8 +1331,8 @@ int shook_py_emit_process(bool abort_on_error, pid_t pid, unsigned int pt, int p
 	PyObject *po_pt = PyInt_FromLong(pt);
 	PyObject *po_ppid = PyInt_FromLong(ppid);
 	
-	for (auto observer: g_observers[SHOOK_EVENT_PROCESS]) {
-		CALL_OBSERVER(observer, po_pid, po_pt, po_ppid, NULL);
+	for (auto rit = observers.rbegin(); rit != observers.rend(); ++rit) {
+		CALL_OBSERVER(*rit, po_pid, po_pt, po_ppid, NULL);
 	}
 
 	Py_DECREF(po_ppid);
@@ -1336,8 +1343,9 @@ int shook_py_emit_process(bool abort_on_error, pid_t pid, unsigned int pt, int p
 
 int shook_py_emit_finish(bool abort_on_error)
 {
-	for (auto rit = g_observers[SHOOK_EVENT_FINISH].rbegin(); rit != g_observers[SHOOK_EVENT_FINISH].rend(); ++rit) {
-		CALL_OBSERVER(*rit, NULL);
+	auto &observers = g_observers[SHOOK_EVENT_FINISH];
+	for (auto &ob: observers) {
+		CALL_OBSERVER(ob, NULL);
 	}
 	return 0;
 }
