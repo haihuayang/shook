@@ -172,6 +172,17 @@ def dissect_connect_bind(stracer, pid, retval, scno, *args):
 	else:
 		return ''
 
+def dissect_getsock(stracer, pid, retval, scno, *args):
+	if retval is None:
+		return '%d, ' % args[0]
+	elif retval == 0:
+		arg_sockfd, arg_addr, arg_addrlen = args
+		addrlen = shook.peek_uint32(pid, arg_addrlen, 1)[0]
+		sockaddr = shook.peek_sockaddr(pid, arg_addr, addrlen)
+		return "%s, %d" % (sockaddr, addrlen)
+	else:
+		return "0x%x, 0x%x" % (arg_addr, arg_addrlen)
+
 def dissect_sendto(stracer, pid, retval, scno, *args):
 	if retval is None:
 		sockfd, buf, length, flags, dest_addr, addrlen = args
@@ -273,6 +284,8 @@ class Stracer(object):
 		shook.SYS_socket: dissect_socket,
 		shook.SYS_connect: dissect_connect_bind,
 		shook.SYS_bind: dissect_connect_bind,
+		shook.SYS_getsockname: dissect_getsock,
+		shook.SYS_getpeername: dissect_getsock,
 		shook.SYS_sendto: dissect_sendto,
 		shook.SYS_sendmsg: dissect_sendmsg,
 		shook.SYS_recvfrom: dissect_recvfrom,
