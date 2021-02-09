@@ -20,6 +20,7 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/un.h>
 #include <fcntl.h>
 #include <linux/netlink.h>
@@ -165,7 +166,7 @@ static PyObject *pystr_from_in_addr(struct in_addr ia)
 static PyObject *pystr_from_in6_addr(const struct in6_addr *ia)
 {
 	char buff[128];
-	inet_ntop(AF_INET6, ia, buff, sizeof(*ia));
+	inet_ntop(AF_INET6, ia, buff, sizeof(buff));
 	return PyString_FromString(buff);
 }
 
@@ -203,10 +204,12 @@ static PyObject *shook_py_peek_sockaddr(PyObject *self, PyObject *args)
 		return po_ret;
 	} else if (ss.ss_family == AF_INET6) {
 		struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&ss;
-		PyObject *po_ret = PyTuple_New(3);
+		PyObject *po_ret = PyTuple_New(5);
 		PyTuple_SET_ITEM(po_ret, 0, PyInt_FromLong(ss.ss_family));
 		PyTuple_SET_ITEM(po_ret, 1, pystr_from_in6_addr(&sin6->sin6_addr));
 		PyTuple_SET_ITEM(po_ret, 2, PyInt_FromLong(ntohs(sin6->sin6_port)));
+		PyTuple_SET_ITEM(po_ret, 3, PyInt_FromLong(sin6->sin6_flowinfo));
+		PyTuple_SET_ITEM(po_ret, 4, PyInt_FromLong(sin6->sin6_scope_id));
 		return po_ret;
 	} else if (ss.ss_family == AF_NETLINK) {
 		struct sockaddr_nl *sa = (struct sockaddr_nl *)&ss;
@@ -222,28 +225,51 @@ static PyObject *shook_py_peek_sockaddr(PyObject *self, PyObject *args)
 	}
 }
 
-static PyObject *shook_py_poke_sockaddr(PyObject *self, PyObject *args)
+static int poke_sockaddr(unsigned int pid, long sa_addr, socklen_t slen, PyObject *args)
 {
 	if (PyTuple_GET_SIZE(args) < 5) {
-		return NULL;
+		return -1;
 	}
 
-	int pid = PyInt_AsLong(PyTuple_GET_ITEM(args, 0));
-	long sa_addr = PyInt_AsLong(PyTuple_GET_ITEM(args, 1));
-	socklen_t slen = PyInt_AsLong(PyTuple_GET_ITEM(args, 2));
 	int af = PyInt_AsLong(PyTuple_GET_ITEM(args, 3));
 
-	if (af == AF_INET) {
+	if (af == AF_UNIX) {
+		if (PyTuple_GET_SIZE(args) != 5) {
+			return -1;
+		}
+		const char *path = PyString_AsString(PyTuple_GET_ITEM(args, 4));
+		size_t path_len = strlen(path);
+
+		struct sockaddr_un sun;
+		if (path_len >= sizeof(sun.sun_path)) {
+			return -1;
+		}
+		if (path_len + offsetof(struct sockaddr_un, sun_path) >= slen) {
+			return -1;
+		}
+		memset(&sun, 0, sizeof sun);
+		sun.sun_family = af;
+		strcpy(sun.sun_path, path);
+
+		socklen_t poke_len = sizeof sun;
+		if (poke_len > slen) {
+			poke_len = slen;
+		}
+
+		vm_poke_mem(pid, &sun, sa_addr, poke_len);
+	} else if (af == AF_INET) {
 		if (PyTuple_GET_SIZE(args) != 6) {
-			return NULL;
+			return -1;
 		}
 		const char *ip_str = PyString_AsString(PyTuple_GET_ITEM(args, 4));
 		int port = PyInt_AsLong(PyTuple_GET_ITEM(args, 5));
 
 		struct sockaddr_in sin;
 		memset(&sin, 0, sizeof sin);
-		sin.sin_family = AF_INET;
-		sin.sin_addr.s_addr = inet_addr(ip_str);
+		sin.sin_family = af;
+		if (!inet_pton(af, ip_str, &sin.sin_addr)) {
+			return -1;
+		}
 		sin.sin_port = htons(port);
 
 		socklen_t poke_len = sizeof sin;
@@ -251,12 +277,70 @@ static PyObject *shook_py_poke_sockaddr(PyObject *self, PyObject *args)
 			poke_len = slen;
 		}
 
-		slen = sizeof sin;
 		vm_poke_mem(pid, &sin, sa_addr, poke_len);
-		
+	} else 	if (af == AF_INET6) {
+		if (PyTuple_GET_SIZE(args) < 6) {
+			return -1;
+		}
+		const char *ip_str = PyString_AsString(PyTuple_GET_ITEM(args, 4));
+		int port = PyInt_AsLong(PyTuple_GET_ITEM(args, 5));
+
+		struct sockaddr_in6 sin6;
+		memset(&sin6, 0, sizeof sin6);
+		sin6.sin6_family = af;
+		if (!inet_pton(af, ip_str, &sin6.sin6_addr)) {
+			return -1;
+		}
+		sin6.sin6_port = htons(port);
+		if (PyTuple_GET_SIZE(args) > 6) {
+			sin6.sin6_flowinfo = PyInt_AsLong(PyTuple_GET_ITEM(args, 6));
+		}
+		if (PyTuple_GET_SIZE(args) > 7) {
+			sin6.sin6_scope_id = PyInt_AsLong(PyTuple_GET_ITEM(args, 7));
+		}
+		if (PyTuple_GET_SIZE(args) > 8) {
+			return -1;
+		}
+
+		socklen_t poke_len = sizeof sin6;
+		if (poke_len > slen) {
+			poke_len = slen;
+		}
+
+		vm_poke_mem(pid, &sin6, sa_addr, poke_len);
+	} else if (af == AF_NETLINK) {
+		if (PyTuple_GET_SIZE(args) != 6) {
+			return -1;
+		}
+		struct sockaddr_nl snl;
+		memset(&snl, 0, sizeof snl);
+		snl.nl_family = af;
+		snl.nl_pid = PyInt_AsLong(PyTuple_GET_ITEM(args, 4));
+		snl.nl_groups = PyInt_AsLong(PyTuple_GET_ITEM(args, 5));
+
+		socklen_t poke_len = sizeof snl;
+		if (poke_len > slen) {
+			poke_len = slen;
+		}
+
+		vm_poke_mem(pid, &snl, sa_addr, poke_len);
 	} else {
 		/* TODO */
 		assert(0);
+		return -1;
+	}
+
+	return 0;
+}
+
+static PyObject *shook_py_poke_sockaddr(PyObject *self, PyObject *args)
+{
+	int pid = PyInt_AsLong(PyTuple_GET_ITEM(args, 0));
+	long sa_addr = PyInt_AsLong(PyTuple_GET_ITEM(args, 1));
+	socklen_t slen = PyInt_AsLong(PyTuple_GET_ITEM(args, 2));
+
+	int err = poke_sockaddr(pid, sa_addr, slen, args);
+	if (err < 0) {
 		return NULL;
 	}
 
@@ -272,7 +356,6 @@ static PyObject *shook_py_poke_sockaddr2(PyObject *self, PyObject *args)
 	int pid = PyInt_AsLong(PyTuple_GET_ITEM(args, 0));
 	long sa_addr = PyInt_AsLong(PyTuple_GET_ITEM(args, 1));
 	long slen_addr = PyInt_AsLong(PyTuple_GET_ITEM(args, 2));
-	int af = PyInt_AsLong(PyTuple_GET_ITEM(args, 3));
 	socklen_t slen;
 	int err = vm_peek_mem(pid, &slen, slen_addr, sizeof(slen));
 	if (err < 0) {
@@ -280,32 +363,13 @@ static PyObject *shook_py_poke_sockaddr2(PyObject *self, PyObject *args)
 		return NULL;
 	}
 
-	if (af == AF_INET) {
-		if (PyTuple_GET_SIZE(args) != 6) {
-			return NULL;
-		}
-		const char *ip_str = PyString_AsString(PyTuple_GET_ITEM(args, 4));
-		int port = PyInt_AsLong(PyTuple_GET_ITEM(args, 5));
-
-		struct sockaddr_in sin;
-		memset(&sin, 0, sizeof sin);
-		sin.sin_family = AF_INET;
-		sin.sin_addr.s_addr = inet_addr(ip_str);
-		sin.sin_port = htons(port);
-
-		socklen_t poke_len = sizeof sin;
-		if (poke_len > slen) {
-			poke_len = slen;
-		}
-
-		slen = sizeof sin;
-		vm_poke_mem(pid, &sin, sa_addr, poke_len);
-		vm_poke_mem(pid, &slen, slen_addr, sizeof(slen));
-		
-	} else {
-		TODO_assert(0);
+	err = poke_sockaddr(pid, sa_addr, slen, args);
+	if (err < 0) {
 		return NULL;
 	}
+
+	slen = err;
+	vm_poke_mem(pid, &slen, slen_addr, sizeof(slen));
 
 	Py_RETURN_NONE;
 }
