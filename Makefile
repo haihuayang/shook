@@ -22,7 +22,7 @@ TARGET_DIR_out := target.dbg.linux.$(TARGET_ARCH)
 TARGET_SET_dir := bin src tests share/shook/scripts
 
 .PHONY: all target_mkdir
-TARGET_SET_tests := time getifaddrs thread signal
+TARGET_SET_tests := time getifaddrs thread signal sockaddr
 TARGET_SET_scripts := shook_utils stracer netlink
 
 TARGET_SET_lib := 
@@ -88,3 +88,7 @@ tarball: $(TARGET_DIR_out)/shook.tar.gz
 $(TARGET_DIR_out)/shook.tar.gz: $(TARGET_DIR_out)/bin/$(PROJECT) $(TARGET_SET_scripts:%=$(TARGET_DIR_out)/share/shook/scripts/%.py)
 	tar czf $(TARGET_DIR_out)/shook.tar.gz -C $(TARGET_DIR_out) bin share
 
+test:
+	./tests/run-tests $(TARGET_DIR_out)
+
+test: $(TARGET_DIR_out)/bin/$(PROJECT) $(TARGET_SET_scripts:%=$(TARGET_DIR_out)/share/shook/scripts/%.py)

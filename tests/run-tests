@@ -1,0 +1,16 @@
+#!/bin/sh
+
+TARGET_DIR="$1"
+
+TESTS_DIR=tests
+
+function run() {
+	name="$1"; shift
+	echo "TEST: $name $@"
+	timeout 5 ${TARGET_DIR}/bin/shook -x "$@" 2>&1 | grep "CHECKPOINT:"
+}
+
+run sockaddr_inet ${TESTS_DIR}/sockaddr.py inet/10.1.2.3/80 inet/192.168.254.253/1080 -- ${TARGET_DIR}/${TESTS_DIR}/sockaddr inet/10.1.2.3/80
+
+run sockaddr_inet6 ${TESTS_DIR}/sockaddr.py inet6/2345::0102:0304:0506/80 inet6/5432::0201:0403:0605/1080 -- ${TARGET_DIR}/${TESTS_DIR}/sockaddr inet6/2345::0102:0304:0506/80
+
