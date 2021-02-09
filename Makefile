@@ -19,17 +19,20 @@ TARGET_PYTHON_LDFLAGS := $(shell pkg-config --libs python3)
 
 TARGET_DIR_out := target.dbg.linux.$(TARGET_ARCH)
 
-TARGET_SET_dir := bin src tests
+TARGET_SET_dir := bin src tests share/shook/scripts
 
 .PHONY: all target_mkdir
 TARGET_SET_tests := time getifaddrs thread signal
+TARGET_SET_scripts := shook_utils stracer netlink
 
 TARGET_SET_lib := 
 
 TARGET_CFLAGS_EXTRA := \
 	-D__X_DEVELOPER__=1
 
-all: $(TARGET_SET_tests:%=$(TARGET_DIR_out)/tests/%) $(TARGET_DIR_out)/bin/$(PROJECT)
+all: $(TARGET_DIR_out)/bin/$(PROJECT) \
+	$(TARGET_SET_tests:%=$(TARGET_DIR_out)/tests/%) \
+	$(TARGET_SET_scripts:%=$(TARGET_DIR_out)/share/shook/scripts/%.py)
 
 TARGET_SET_src := main version vdso \
 	python syscallent log timerq utils \
@@ -55,6 +58,9 @@ $(TARGET_DIR_out)/tests/%.o: tests/%.cxx | target_mkdir
 
 TARGET_DEPFILES := $(TARGET_SET_tests:%=$(TARGET_DIR_out)/tests/%.o.d) $(TARGET_SET_src:%=$(TARGET_DIR_out)/src/%.o.d)
 
+$(TARGET_DIR_out)/share/shook/scripts/%.py: scripts/%.py | target_mkdir
+	install -m 644 $< $(TARGET_DIR_out)/share/shook/scripts 
+
 include $(wildcard $(TARGET_DEPFILES))
 
 target_mkdir: $(TARGET_SET_dir:%=$(TARGET_DIR_out)/%)
@@ -66,9 +72,19 @@ $(TARGET_SET_dir:%=$(TARGET_DIR_out)/%): %:
 clean:
 	rm -rf $(TARGET_DIR_out)
 
-SCRIPTS := stracer.py netlink.py shook_utils.py
+define install_files
+	@echo "install files to $(1)"
+	install -d $(1)/bin/ $(1)/share/shook/scripts
+	install -m 755 $(TARGET_DIR_out)/bin/shook $(1)/bin/
+	install -m 644 $(TARGET_SET_scripts:%=scripts/%.py) $(1)/share/shook/scripts 
+endef
+
 DESTDIR ?= /usr/local
 install: all
-	install -d $(DESTDIR)/bin/ $(DESTDIR)/share/shook/scripts
-	install -m 755 $(TARGET_DIR_out)/bin/shook $(DESTDIR)/bin/
-	install -m 644 $(SCRIPTS:%=scripts/%) $(DESTDIR)/share/shook/scripts 
+	$(call install_files,$(DESTDIR))
+
+tarball: $(TARGET_DIR_out)/shook.tar.gz
+
+$(TARGET_DIR_out)/shook.tar.gz: $(TARGET_DIR_out)/bin/$(PROJECT) $(TARGET_SET_scripts:%=$(TARGET_DIR_out)/share/shook/scripts/%.py)
+	tar czf $(TARGET_DIR_out)/shook.tar.gz -C $(TARGET_DIR_out) bin share
+
