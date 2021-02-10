@@ -1,5 +1,6 @@
 
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <arpa/inet.h>
 #include <assert.h>
 #include <stdlib.h>
@@ -8,6 +9,7 @@
 #include <vector>
 #include <string>
 #include <sstream>
+#include <cstddef>
 
 static std::vector<std::string> split(const char *str, char sep)
 {
@@ -22,12 +24,26 @@ static std::vector<std::string> split(const char *str, char sep)
 
 static int parse_sockaddr(struct sockaddr_storage *ss, const char *str)
 {
-	std::vector<std::string> comps = split(str, '/');
+	std::vector<std::string> comps = split(str, ',');
 	if (comps.empty()) {
 		return -EINVAL;
 	}
 
-	if (comps[0] == "inet") {
+	if (comps[0] == "unix") {
+		if (comps.size() != 2) {
+			return -EINVAL;
+		}
+		struct sockaddr_un *sun = (struct sockaddr_un *)ss;
+		sun->sun_family = AF_UNIX;
+		size_t length = comps[1].size();
+		if (length > sizeof(sun->sun_path)) {
+			length = sizeof(sun->sun_path);
+		}
+
+		memcpy(sun->sun_path, comps[1].c_str(), length);
+		//return offsetof(struct sockaddr_un, sun_path) + length;
+		return sizeof(*sun);
+	} else if (comps[0] == "inet") {
 		if (comps.size() != 3) {
 			return -EINVAL;
 		}
