@@ -257,6 +257,20 @@ def dissect_setxattr(stracer, pid, retval, scno, *args):
 	else:
 		return ''
 
+def dissect_poll(stracer, pid, retval, scno, *args):
+	if retval is None:
+		arg_fds, arg_nfds, arg_timeout = args
+		pollfd = shook.peek_pollfd(pid, arg_fds, arg_nfds)
+		str_pollfd = [ "{%d, 0x%x}" % (pfd[0], pfd[1]) for pfd in pollfd ]
+		return '%s, %d, %d' % (str_pollfd, arg_nfds, arg_timeout)
+	elif retval > 0:
+		arg_fds, arg_nfds, arg_timeout = args
+		pollfd = shook.peek_pollfd(pid, arg_fds, arg_nfds)
+		str_pollfd = [ "{%d, 0x%x}" % (pfd[0], pfd[2]) for pfd in pollfd if pfd[2] != 0]
+		return ' -> %s' % str_pollfd
+	else:
+		return ''
+
 def dissect_default(stracer, pid, retval, scno, *args):
 	if retval is None:
 		return ', '.join(['%d' % arg for arg in args])
@@ -291,6 +305,7 @@ class Stracer(object):
 		shook.SYS_sendmsg: dissect_sendmsg,
 		shook.SYS_recvfrom: dissect_recvfrom,
 		shook.SYS_recvmsg: dissect_recvmsg,
+		shook.SYS_poll: dissect_poll,
 	}
 
 	def __init__(self, output):
