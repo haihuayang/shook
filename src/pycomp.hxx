@@ -25,6 +25,7 @@ extern "C" {
 #define PyInt_AsSsize_t PyLong_AsSsize_t
 
 #define PyString_FromString PyUnicode_FromString
+#define PyString_FromStringAndSize PyUnicode_FromStringAndSize
 #define PyString_Decode PyUnicode_Decode
 #define PyString_FromFormat PyUnicode_FromFormat
 #define PyString_Check PyUnicode_Check

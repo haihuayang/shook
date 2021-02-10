@@ -193,7 +193,16 @@ static PyObject *shook_py_peek_sockaddr(PyObject *self, PyObject *args)
 		struct sockaddr_un *sun = (struct sockaddr_un *)&ss;
 		PyObject *po_ret = PyTuple_New(2);
 		PyTuple_SET_ITEM(po_ret, 0, PyInt_FromLong(ss.ss_family));
-		PyTuple_SET_ITEM(po_ret, 1, PyString_FromString(sun->sun_path));
+		if (salen > offsetof(struct sockaddr_un, sun_path)) {
+			const char *end = (const char *)&ss + salen;
+			const char *p = sun->sun_path + 1; // the first 0 means abstract binding
+			for ( ; p < end && *p; ++p) {
+			}
+			PyTuple_SET_ITEM(po_ret, 1, PyString_FromStringAndSize(sun->sun_path,
+						p - sun->sun_path));
+		} else {
+			PyTuple_SET_ITEM(po_ret, 1, PyString_FromString(""));
+		}
 		return po_ret;
 	} else if (ss.ss_family == AF_INET) {
 		struct sockaddr_in *sin = (struct sockaddr_in *)&ss;
@@ -242,14 +251,11 @@ static int poke_sockaddr(unsigned int pid, long sa_addr, socklen_t slen, PyObjec
 
 		struct sockaddr_un sun;
 		if (path_len >= sizeof(sun.sun_path)) {
-			return -1;
-		}
-		if (path_len + offsetof(struct sockaddr_un, sun_path) >= slen) {
-			return -1;
+			path_len = sizeof(sun.sun_path);
 		}
 		memset(&sun, 0, sizeof sun);
 		sun.sun_family = af;
-		strcpy(sun.sun_path, path);
+		memcpy(sun.sun_path, path, path_len);
 
 		socklen_t poke_len = sizeof sun;
 		if (poke_len > slen) {

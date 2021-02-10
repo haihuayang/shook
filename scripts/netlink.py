@@ -190,7 +190,7 @@ class netlink_socket(shook_utils.FD):
 		iface_index = self.index
 
 		msg_name, msg_namelen, msg_iov, msg_iovlen, _, _, msg_flags = shook.peek_msghdr(pid, msg, 1)[0]
-		print('on_recvmsg', '0x%x' % flags, msg_iov, msg_iovlen, msg_flags)
+		#print('on_recvmsg', '0x%x' % flags, msg_iov, msg_iovlen, msg_flags)
 		v_msg_name = struct.pack('<HHII', socket.AF_NETLINK, 0, 0, 0)
 		if msg_namelen > len(v_msg_name):
 			msg_namelen = len(v_msg_name)
@@ -213,7 +213,7 @@ class netlink_socket(shook_utils.FD):
 
 		iovec = shook.peek_iovec(pid, msg_iov, msg_iovlen)
 		ret = shook.poke_datav(pid, data, *iovec)
-		print('shook.poke_datav', iovec, ret)
+		#print('shook.poke_datav', iovec, ret)
 		if flags & socket.MSG_TRUNC:
 			ret = len(data)
 		if not (flags & socket.MSG_PEEK):

@@ -181,6 +181,7 @@ def dissect_getsock(stracer, pid, retval, scno, *args):
 		sockaddr = shook.peek_sockaddr(pid, arg_addr, addrlen)
 		return "%s, %d" % (sockaddr, addrlen)
 	else:
+		arg_sockfd, arg_addr, arg_addrlen = args
 		return "0x%x, 0x%x" % (arg_addr, arg_addrlen)
 
 def dissect_sendto(stracer, pid, retval, scno, *args):
