@@ -16,7 +16,10 @@ extern "C" {
 	
 typedef unsigned long ya_tick_t;
 typedef long ya_tick_diff_t;
-	
+
+#define YA_TICK_FROM_SEC(s) ((s) * 1000)
+#define YA_TICK_FROM_MSEC(s) (s)
+
 static inline ya_tick_t ya_get_tick(void)
 {
 #ifdef _WIN32

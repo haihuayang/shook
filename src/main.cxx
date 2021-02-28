@@ -104,8 +104,11 @@ struct gstate_t
 	int signalfd = -1;
 	bool enable_vdso = false;
 	bool aborted = false;
+	bool exiting = false;
 	pid_t start_pid = -1;
 	unsigned int exit_code = 0;
+
+	ya_timer_t exiting_timer;
 
 	unw_addr_space_t unw_addr_space;
 };
@@ -137,22 +140,41 @@ static int detach(pid_t pid)
 	return 0;
 }
 
-static void exit_detach(tcb_t &tcb)
+static void exit_detach(tcb_t &tcb, int signo)
 {
 	uint32_t flags = tcb.flags & (FLAG_DETACHING | FLAG_CREATED);
 	if (flags == FLAG_CREATED) {
-		DBG("killing %d\n", tcb.pid);
-		kill(tcb.pid, SIGTERM);
+		LOG(LOG_INFO, "killing %d %d", tcb.pid, signo);
+		kill(tcb.pid, signo);
 	} else if (flags == 0) {
 		detach(tcb.pid);
 	}
 }
 
+static ya_tick_diff_t exiting_timer_func(ya_timer_t *timer, ya_tick_t now)
+{
+	assert(timer == &gstate.exiting_timer);
+	assert(gstate.exiting);
+
+	LOG(LOG_ERROR, "exiting timeout, send SIGKILL to tracee");
+	for (auto &it: gstate.tcbs) {
+		exit_detach(it.second, SIGKILL);
+	}
+
+	return -1;
+}
+
 static void exiting()
 {
-	for (auto &it: gstate.tcbs) {
-		exit_detach(it.second);
+	if (gstate.exiting) {
+		return;
 	}
+	gstate.exiting = true;
+	for (auto &it: gstate.tcbs) {
+		exit_detach(it.second, SIGTERM);
+	}
+	ya_timer_init(&gstate.exiting_timer, exiting_timer_func);
+	shook_set_timer(&gstate.exiting_timer, YA_TICK_FROM_MSEC(5000));
 }
 
 static void shook_abort()
@@ -265,7 +287,7 @@ static void trace_new_proc(pid_t pid, unsigned int type, pid_t create_pid, uint3
 	DBG("trace_new_proc pid=%d, type=%d, creator=%d", pid, type, create_pid);
 	const auto &ret = gstate.tcbs.emplace(pid, tcb_t(pid, type, create_pid, flags));
 	if (gstate.aborted) {
-		exit_detach(ret.first->second);
+		exit_detach(ret.first->second, SIGTERM);
 		return;
 	}
 	emit_process(pid, type, create_pid);
