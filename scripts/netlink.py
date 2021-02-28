@@ -171,7 +171,18 @@ class netlink_socket(shook_utils.FD):
 	def __init__(self, ifaces):
 		self.index = 0
 		self.ifaces = ifaces
+		self.error_count = 0
 
+	# TODO for unknown reason, kernel sometime does not return the right pid,
+	# overwrite the pid by name
+	def on_getsockname(self, pid, retval, arg_sockfd, arg_addr, arg_addrlen):
+		if retval == 0:
+			addrlen = shook.peek_uint32(pid, arg_addrlen, 1)[0]
+			sockaddr = shook.peek_sockaddr(pid, arg_addr, addrlen)
+			assert sockaddr[0] == socket.AF_NETLINK
+			if sockaddr[1] != pid:
+				shook_utils.report("Warning: netlink sockname %d != %d" % (sockaddr[1], pid))
+				shook.poke_sockaddr(pid, arg_addr, addrlen, sockaddr[0], pid, sockaddr[2])
 	def on_sendto(self, pid, retval, fd, addr, length, flags, src_addr, addrlen):
 		assert retval is None
 		#TODO check length == 20?
@@ -180,6 +191,7 @@ class netlink_socket(shook_utils.FD):
 		#TODO check nlmsg_len == 20?
 		assert nlmsg_type in [ RTM_GETLINK, RTM_GETADDR]
 
+		self.error_count = 0
 		self.index = 0
 		self.nlmsg_seq = nlmsg_seq
 		self.nlmsg_type = nlmsg_type
@@ -196,8 +208,10 @@ class netlink_socket(shook_utils.FD):
 			msg_namelen = len(v_msg_name)
 		shook.poke_data(pid, v_msg_name, msg_name, msg_namelen)
 
-		if iface_index >= len(self.ifaces):
-			data = struct.pack('<IHHIII', 20, 3, 2, self.nlmsg_seq, pid, 0)
+		if iface_index == len(self.ifaces):
+			assert self.error_count < 10
+			data = struct.pack('<IHHIII', 20, NLMSG_DONE, 2, self.nlmsg_seq, pid, 0)
+			self.error_count += 1
 		else:
 			retarr = [b'\x00' * 16]
 			if self.nlmsg_type == RTM_GETLINK:
