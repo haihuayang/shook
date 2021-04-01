@@ -80,6 +80,9 @@ IFA_FLAGS		= 8
 
 IFA_F_PERMANENT		= 0x80
 
+SOL_NETLINK		= 270
+NETLINK_PKTINFO		= 3
+SCM_CREDENTIALS		= 0x02
 
 class in_ifaddr:
 	def __init__(self, ifa_addr, ifa_prefixlen, ifa_scope, broadcast):
@@ -167,22 +170,33 @@ def pack_addr(iface, retarr):
 	retarr.append(nla_put_uint32(IFA_FLAGS, IFA_F_PERMANENT))
 	# TODO IFA_CACHEINFO
 
-class netlink_socket(shook_utils.FD):
+class netlink_socket(shook_utils.FD,shook_utils.Pollable):
 	def __init__(self, ifaces):
 		self.index = 0
 		self.ifaces = ifaces
 		self.error_count = 0
+		self.nl_pid = None
 
-	# TODO for unknown reason, kernel sometime does not return the right pid,
+	def get_nl_pid(self, pid):
+		return pid if self.nl_pid is None else self.nl_pid
+
+	def want_recv(self, fd):
+		return True
+
+	def want_send(self, fd):
+		return True
+
+	# kernel randomly pick a nl_pid when the pid is already bind
 	# overwrite the pid by name
 	def on_getsockname(self, pid, retval, arg_sockfd, arg_addr, arg_addrlen):
 		if retval == 0:
 			addrlen = shook.peek_uint32(pid, arg_addrlen, 1)[0]
 			sockaddr = shook.peek_sockaddr(pid, arg_addr, addrlen)
 			assert sockaddr[0] == socket.AF_NETLINK
+			self.nl_pid = sockaddr[1]
 			if sockaddr[1] != pid:
 				shook_utils.report("Warning: netlink sockname %d != %d" % (sockaddr[1], pid))
-				shook.poke_sockaddr(pid, arg_addr, addrlen, sockaddr[0], pid, sockaddr[2])
+
 	def on_sendto(self, pid, retval, fd, addr, length, flags, src_addr, addrlen):
 		assert retval is None
 		#TODO check length == 20?
@@ -198,19 +212,40 @@ class netlink_socket(shook_utils.FD):
 		return shook.ACTION_BYPASS, length
 
 	def on_recvmsg(self, pid, retval, fd, msg, flags):
+		# TODO return multiple interface in one msg
 		assert retval is None
 		iface_index = self.index
 
-		msg_name, msg_namelen, msg_iov, msg_iovlen, _, _, msg_flags = shook.peek_msghdr(pid, msg, 1)[0]
+		msg_name, msg_namelen, msg_iov, msg_iovlen, msg_control, msg_controllen, msg_flags = shook.peek_msghdr(pid, msg, 1)[0]
 		#print('on_recvmsg', '0x%x' % flags, msg_iov, msg_iovlen, msg_flags)
 		v_msg_name = struct.pack('<HHII', socket.AF_NETLINK, 0, 0, 0)
 		if msg_namelen > len(v_msg_name):
 			msg_namelen = len(v_msg_name)
 		shook.poke_data(pid, v_msg_name, msg_name, msg_namelen)
 
+		v_control = b''
+		ret_controllen = 0
+		if msg_controllen >= 20:
+			# nl_pktinfo
+			v_control = struct.pack('<QIII', 20, SOL_NETLINK, NETLINK_PKTINFO, 0)
+			ret_controllen = 20
+		if msg_controllen >= 24 + 28:
+			# ucred
+			v_control += struct.pack('<IQIIIII', 0, 28, socket.SOL_SOCKET, SCM_CREDENTIALS, 0, 0, 0)
+			ret_controllen = 24 + 28
+
+		if ret_controllen:
+			shook.poke_data(pid, v_control, msg_control, ret_controllen)
+
 		if iface_index == len(self.ifaces):
-			assert self.error_count < 10
-			data = struct.pack('<IHHIII', 20, NLMSG_DONE, 2, self.nlmsg_seq, pid, 0)
+			if self.error_count > 9:
+				shook_utils.report(pid, "Too many recv from netlink socket after end")
+				stacks = shook.backtrace(pid)
+				for ip, offset, symbol in stacks:
+			                print('    0x%x %s+%d' % (ip, symbol, offset))
+				assert False
+
+			data = struct.pack('<IHHIII', 20, NLMSG_DONE, 2, self.nlmsg_seq, self.get_nl_pid(pid), 0)
 			self.error_count += 1
 		else:
 			retarr = [b'\x00' * 16]
@@ -221,13 +256,13 @@ class netlink_socket(shook_utils.FD):
 				pack_addr(self.ifaces[self.index], retarr)
 				nlmsg_type = RTM_NEWADDR
 			nlmsg_length = sum([ len(x) for x in retarr ])
-			retarr[0] = struct.pack('<IHHII', nlmsg_length, nlmsg_type, 2, self.nlmsg_seq, pid)
+			retarr[0] = struct.pack('<IHHII', nlmsg_length, nlmsg_type, 2, self.nlmsg_seq, self.get_nl_pid(pid))
 			data = b''.join(retarr)
 			iface_index += 1
 
 		iovec = shook.peek_iovec(pid, msg_iov, msg_iovlen)
 		ret = shook.poke_datav(pid, data, *iovec)
-		#print('shook.poke_datav', iovec, ret)
+
 		if flags & socket.MSG_TRUNC:
 			ret = len(data)
 		if not (flags & socket.MSG_PEEK):
