@@ -271,6 +271,28 @@ def dissect_poll(stracer, pid, retval, scno, *args):
 	else:
 		return ''
 
+def dissect_ppoll(stracer, pid, retval, scno, *args):
+	if retval is None:
+		arg_fds, arg_nfds, arg_tmo_p, arg_sigmask, arg_sigsetsize = args
+		pollfd = shook.peek_pollfd(pid, arg_fds, arg_nfds)
+		str_pollfd = [ "{%d, 0x%x}" % (pfd[0], pfd[1]) for pfd in pollfd ]
+		if arg_tmo_p:
+			str_tmo = "%d.%09d" % shook.peek_timespec(pid, arg_tmo_p, 1)[0]
+		else:
+			str_tmo = 'NULL'
+		return '%s, %d, %s' % (str_pollfd, arg_nfds, str_tmo)
+	elif retval > 0:
+		arg_fds, arg_nfds, arg_tmo_p, arg_sigmask, arg_sigsetsize = args
+		pollfd = shook.peek_pollfd(pid, arg_fds, arg_nfds)
+		str_pollfd = [ "{%d, 0x%x}" % (pfd[0], pfd[2]) for pfd in pollfd if pfd[2] != 0]
+		if arg_tmo_p:
+			str_tmo = "%d.%09d" % shook.peek_timespec(pid, arg_tmo_p, 1)[0]
+		else:
+			str_tmo = 'NULL'
+		return ' -> %s, %s' % (str_pollfd, str_tmo)
+	else:
+		return ''
+
 def dissect_default(stracer, pid, retval, scno, *args):
 	if retval is None:
 		return ', '.join(['%d' % arg for arg in args])
@@ -306,6 +328,7 @@ class Stracer(object):
 		shook.SYS_recvfrom: dissect_recvfrom,
 		shook.SYS_recvmsg: dissect_recvmsg,
 		shook.SYS_poll: dissect_poll,
+		shook.SYS_ppoll: dissect_ppoll,
 	}
 
 	def __init__(self, output):

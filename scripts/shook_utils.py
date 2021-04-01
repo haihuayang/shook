@@ -317,7 +317,6 @@ class TraceeMgmt__:
 			fd, sa, slen = args
 			_, fd_obj, _ = self.get_fd(pid, fd)
 			if isinstance(fd_obj, FD):
-				report("shook_utils getsockname", fd)
 				return fd_obj.on_getsockname(pid, retval, fd, sa, slen)
 		elif scno == shook.SYS_getpeername:
 			fd, sa, slen = args
@@ -419,53 +418,73 @@ class TraceeMgmt__:
 					report('epoll_wait', *ready)
 					shook.poke_epoll_event(pid, events, *ready)
 					return shook.ACTION_BYPASS, len(ready)
-		elif scno == shook.SYS_poll:
+		elif scno == shook.SYS_ppoll:
+			# TODO kernel modify arg_tmo_p 
+			arg_fds, arg_nfds, arg_tmo_p, arg_sigmask, arg_sigsetsize = args
 			if retval is None:
-				fds, nfds, timeout = args
-				pollfd = shook.peek_pollfd(pid, fds, nfds)
-				new_pollfd, ret_pollfd = [], []
-				ready_count = 0
-				index = 0
-				for pfd in pollfd:
-					_, fd_obj, _ = self.get_fd(pid, pfd[0])
-					if isinstance(fd_obj, Pollable):
-						revents = 0
-						if pfd[1] & select.POLLOUT and fd_obj.want_send(pfd[0]):
-							revents |= select.POLLOUT
-						if pfd[1] & select.POLLIN and fd_obj.want_recv(pfd[0]):
-							revents |= select.POLLIN
-						ret_pollfd.append((pfd[0], pfd[1], revents, index))
-						if revents != 0:
-							ready_count += 1
-					else:
-						new_pollfd.append(pfd)
-					index += 1
-				# TODO can avoid save the ret_pollfd?
-				self.dprint('pollfd', pollfd, new_pollfd, ret_pollfd)
-				self.push(pid, fds, nfds, ret_pollfd)
-				if len(ret_pollfd) > 0:
-					shook.poke_pollfd(pid, fds, *new_pollfd)
-					return shook.ACTION_REDIRECT, shook.SYS_poll, fds, len(new_pollfd), \
-						0 if ready_count > 0 else timeout
+				ready, ret_nfds = self.rewrite_pollfd_enter(pid, arg_fds, arg_nfds)
+				if ret_nfds != arg_nfds:
+					if ready:
+						# make it return immediately
+						arg_tmo_p = shook.alloc_copy(pid, struct.pack('QQ', 0, 0))
+					return shook.ACTION_REDIRECT, scno, arg_fds, ret_nfds, arg_tmo_p, arg_sigmask, arg_sigsetsize
 			else:
-				fds, nfds, ret_pollfd = self.pop(pid)
-				if retval < 0:
-					return None
-				elif len(ret_pollfd) > 0:
-					pollfd = shook.peek_pollfd(pid, fds, nfds - len(ret_pollfd))
-					new_pollfd = list(pollfd)
-					for fd, events, revents, index in ret_pollfd:
-						new_pollfd.insert(index, (fd, events, revents))
-						if revents != 0:
-							retval += 1
-					report('rewrite ret pollfds', pollfd, ret_pollfd, new_pollfd, retval)
-					assert len(new_pollfd) == nfds
-					shook.poke_pollfd(pid, fds, *new_pollfd)
-					return shook.ACTION_RETURN, retval
-				else:
-					pollfd = shook.peek_pollfd(pid, fds, nfds)
-					self.dprint('not modified', retval, pollfd)
+				return self.rewrite_pollfd_leave(pid, retval, arg_fds, arg_nfds)
+
+		elif scno == shook.SYS_poll:
+			arg_fds, arg_nfds, arg_timeout = args
+			if retval is None:
+				ready, ret_nfds = self.rewrite_pollfd_enter(pid, arg_fds, arg_nfds)
+				if ret_nfds != arg_nfds:
+					return shook.ACTION_REDIRECT, scno, arg_fds, ret_nfds, 0 if ready else arg_timeout
+			else:
+				return self.rewrite_pollfd_leave(pid, retval, arg_fds, arg_nfds)
 					
+	def rewrite_pollfd_enter(self, pid, arg_fds, arg_nfds):
+		pollfd = shook.peek_pollfd(pid, arg_fds, arg_nfds)
+		new_pollfd, ret_pollfd = [], []
+		ready_count = 0
+		index = 0
+		for pfd in pollfd:
+			_, fd_obj, _ = self.get_fd(pid, pfd[0])
+			if isinstance(fd_obj, Pollable):
+				revents = 0
+				if pfd[1] & select.POLLOUT and fd_obj.want_send(pfd[0]):
+					revents |= select.POLLOUT
+				if pfd[1] & select.POLLIN and fd_obj.want_recv(pfd[0]):
+					revents |= select.POLLIN
+				ret_pollfd.append((pfd[0], pfd[1], revents, index))
+				if revents != 0:
+					ready_count += 1
+			else:
+				new_pollfd.append(pfd)
+			index += 1
+		# TODO can avoid save the ret_pollfd?
+		self.dprint('pollfd', pollfd, new_pollfd, ret_pollfd)
+		self.push(pid, arg_fds, arg_nfds, ret_pollfd)
+		if len(ret_pollfd) > 0:
+			shook.poke_pollfd(pid, arg_fds, *new_pollfd)
+		return ready_count, len(new_pollfd)
+		
+	def rewrite_pollfd_leave(self, pid, retval, arg_fds, arg_nfds):
+		fds, nfds, ret_pollfd = self.pop(pid)
+		if retval < 0:
+			return None
+		elif len(ret_pollfd) > 0:
+			pollfd = shook.peek_pollfd(pid, fds, nfds - len(ret_pollfd))
+			new_pollfd = list(pollfd)
+			for fd, events, revents, index in ret_pollfd:
+				new_pollfd.insert(index, (fd, events, revents))
+				if revents != 0:
+					retval += 1
+			self.dprint('rewrite ret pollfds', pollfd, ret_pollfd, new_pollfd, retval)
+			assert len(new_pollfd) == nfds
+			shook.poke_pollfd(pid, fds, *new_pollfd)
+			return shook.ACTION_RETURN, retval
+		else:
+			pollfd = shook.peek_pollfd(pid, fds, nfds)
+			self.dprint('not modified', retval, pollfd)
+
 # TODO TraceeMgmt__ is singleton
 the_tracee_manager = TraceeMgmt__()
 def get_tracee_manager():
