@@ -17,6 +17,10 @@
 
 #include "timer.h"
 
+#define SHOOK_MAJOR_VERSION 0
+#define SHOOK_MINOR_VERSION 2
+#define SHOOK_PATCH_VERSION 1
+
 #define STR_1(x) #x
 #define STR(x) STR_1(x)
 
@@ -45,14 +49,14 @@ enum {
 	} \
 } while (0)
 
-#define DBG(fmt, ...) LOG(LOG_DEBUG, "at %s:%d " fmt, __FILE__, __LINE__, __VA_ARGS__)
-#define VERB(fmt, ...) LOG(LOG_VERB, "at %s:%d:%s " fmt, __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
+#define DBG(fmt, ...) LOG(LOG_DEBUG, "at %s:%d " fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define VERB(fmt, ...) LOG(LOG_VERB, "at %s:%d:%s " fmt, __FILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__)
+#define WARN(fmt, ...) LOG(LOG_WARN, "at %s:%d " fmt, __FILE__, __LINE__, ##__VA_ARGS__)
 #define FATAL(fmt, ...) do { \
-	LOG(LOG_FATAL, "at %s:%d " fmt, __FILE__, __LINE__, __VA_ARGS__); \
+	LOG(LOG_FATAL, "at %s:%d " fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
 	abort(); \
 } while (0)
 
-extern const char *g_version;
 extern const char *g_build_date;
 extern const char *g_git_commit;
 

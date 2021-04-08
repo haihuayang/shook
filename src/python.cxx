@@ -1058,6 +1058,77 @@ static std::string get_python_dir()
 	return path;
 }
 
+static PyTypeObject VersionInfoType;
+
+static PyStructSequence_Field version_info_fields[] = {
+	{(char *)"major", (char *)"Major release number"},
+	{(char *)"minor", (char *)"Minor release number"},
+	{(char *)"patch", (char *)"Patch release number"},
+	{(char *)"commit", (char *)"Git commit number"},
+	{(char *)"build_date", (char *)"Build date"},
+	{0}
+};
+
+PyDoc_STRVAR(version_info__doc__,
+MODULE_NAME ".version\n\
+\n\
+Version information as a named tuple.");
+
+static PyStructSequence_Desc version_info_desc = {
+	(char *) MODULE_NAME ".version",     /* name */
+	version_info__doc__,    /* doc */
+	version_info_fields,    /* fields */
+	5
+};
+
+static int init_version(PyObject *mod_this)
+{
+	/* version_info */
+	if (VersionInfoType.tp_name == NULL) {
+		if (PyStructSequence_InitType2(&VersionInfoType,
+					&version_info_desc) < 0) {
+			FATAL("Initialize VersionInfoType");
+		}
+	}
+
+	PyObject *version_obj;
+	int pos = 0;
+
+	version_obj = PyStructSequence_New(&VersionInfoType);
+	if (version_obj == NULL) {
+		FATAL("Create version object");
+	}
+
+#define SetIntItem(val) \
+	PyStructSequence_SET_ITEM(version_obj, pos++, PyLong_FromLong(val))
+#define SetStrItem(val) \
+	PyStructSequence_SET_ITEM(version_obj, pos++, PyUnicode_FromString(val))
+
+	SetIntItem(SHOOK_MAJOR_VERSION);
+	SetIntItem(SHOOK_MINOR_VERSION);
+	SetIntItem(SHOOK_PATCH_VERSION);
+	SetStrItem(g_git_commit);
+	SetStrItem(g_build_date);
+#undef SetIntItem
+#undef SetStrItem
+
+	if (PyErr_Occurred()) {
+		FATAL("Initialize version object");
+	}
+
+	PyModule_AddObject(mod_this, "version", version_obj);
+	/* prevent user from creating new instances */
+	VersionInfoType.tp_init = NULL;
+	VersionInfoType.tp_new = NULL;
+	int res = PyDict_DelItemString(VersionInfoType.tp_dict, "__new__");
+	if (res < 0 && PyErr_ExceptionMatches(PyExc_KeyError)) {
+		WARN("Remove __new__ on VersionInfoType");
+		PyErr_Clear();
+	}
+
+	return 0;
+}
+
 int py_init(const char *pymod_name,
 		int script_argc, char **script_argv)
 {
@@ -1100,6 +1171,8 @@ int py_init(const char *pymod_name,
 		}
 	}
 
+	init_version(mod_this);
+
 #define SHOOK_EVENT_DECL(x) PyModule_AddIntConstant(mod_this, "EVENT_"#x, SHOOK_EVENT_##x);
 	SHOOK_EVENT_ENUM
 #undef SHOOK_EVENT_DECL
@@ -1129,8 +1202,6 @@ int py_init(const char *pymod_name,
 		g_signal_ent[i].po_value = po;
 		PyModule_AddObject(mod_this, symbol, po);
 	}
-
-	PyModule_AddObject(mod_this, "version", PyString_FromString(g_version));
 
 #define ADD_INT_PYOBJECT(x) \
 	PyModule_AddObject(mod_this, #x, PyInt_FromLong(x))

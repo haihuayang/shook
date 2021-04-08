@@ -3,7 +3,6 @@ MAKEFLAGS += --no-builtin-rules
 .SUFFIXES:
 
 PROJECT := shook
-VERSION := 0.2
 GIT_COMMIT := $(shell git describe --abbrev=0 --dirty --always --tags)
 BUILD_DATE := $(shell date '+%Y%m%d-%H%M%S')
 TARGET_ARCH := x86_64
@@ -41,7 +40,7 @@ $(TARGET_DIR_out)/bin/$(PROJECT): $(TARGET_SET_src:%=$(TARGET_DIR_out)/src/%.o) 
 	$(TARGET_CXX) -g $(TARGET_LDFLAGS) -o $@ $^ $(TARGET_PYTHON_LDFLAGS) -lunwind-x86_64 -lunwind-ptrace
 
 $(TARGET_DIR_out)/src/version.o: src/version.cxx
-	$(TARGET_CXX) -c $(TARGET_CXXFLAGS) $(TARGET_PYTHON_CFLAGS) -DVERSION=\"$(VERSION)\" -DGIT_COMMIT=\"$(GIT_COMMIT)\" -DBUILD_DATE=\"$(BUILD_DATE)\" -o $@ $<
+	$(TARGET_CXX) -c $(TARGET_CXXFLAGS) $(TARGET_PYTHON_CFLAGS) -DGIT_COMMIT=\"$(GIT_COMMIT)\" -DBUILD_DATE=\"$(BUILD_DATE)\" -DBUILD_ARCH=\"$(TARGET_ARCH)\" -o $@ $<
 
 $(TARGET_DIR_out)/src/version.o: $(TARGET_SET_src:%=src/%.cxx)
 

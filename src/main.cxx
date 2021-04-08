@@ -868,8 +868,9 @@ int main(int argc, char **argv)
 		if (false) {
 			/* placeholder */
 		} else if (strcmp(*argv, "-version") == 0) {
-			printf("shook %s %s %s\n",
-					g_version, g_git_commit, g_build_date);
+			printf("shook %d.%d.%d %s %s\n",
+					SHOOK_MAJOR_VERSION, SHOOK_MINOR_VERSION, SHOOK_PATCH_VERSION,
+					g_git_commit, g_build_date);
 			return 0;
 		} else if (strcmp(*argv, "-x") == 0) {
 			NEXT_ARG(argv);
