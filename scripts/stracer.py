@@ -309,6 +309,7 @@ class Stracer(object):
 	dissects = {
 		shook.SYS_execve: dissect_execve,
 		shook.SYS_open: dissect_open,
+		shook.SYS_openat: dissect_openat,
 		shook.SYS_mkdir: dissect_mkdir,
 		shook.SYS_unlink: dissect_unlink,
 		shook.SYS_stat: dissect_stat,

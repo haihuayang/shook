@@ -70,7 +70,7 @@ static inline void check_heap(const ya_timerq_t *timerq)
 	ya_timer_t * const * timers = get_timers(timerq);
 	assert(get_count(timerq) == 0 || (timers[1] != NULL && timers[1]->internal == 1));
 	for (size_t i = 2; i <= get_count(timerq); ++i) {
-		assert(timers[i]->internal == i);
+		assert((size_t)timers[i]->internal == i);
 		assert(ya_tick_cmp(timers[parent(i)]->timeout, timers[i]->timeout) <= 0);
 	}
 }
@@ -267,7 +267,7 @@ static void timerq_cancel__(ya_timerq_t *timerq, ya_timer_t *timer)
 		assert(timer_is_valid(timerq, timer));
 		check_dirty(timerq);
 		assert(timer_is_valid(timerq, timer));
-		if (timer->internal == get_count(timerq)) {
+		if ((size_t)timer->internal == get_count(timerq)) {
 			timerq->timers.pop_back();
 		} else {
 			set_timer(timerq, timer->internal, timerq->timers.back());
