@@ -637,15 +637,16 @@ static void trace(pid_t pid, unsigned int status, tcb_t &tcb, ya_tick_t now)
 
 	/* Gather system call arguments or result */
 	if (ptrace(PTRACE_GETREGS, pid, 0, &tcb.regs) == -1) {
-		if (errno == ESRCH) {
-			DBG("pid %d exit %lld", pid, tcb.regs.rdi);
-			detached(tcb, tcb.regs.rdi);
-			if (gstate.tcbs.empty()) {
-				terminate();
-			}
-		} else {
+		if (errno != ESRCH) {
 			FATAL("%s", strerror(errno));
 		}
+
+		DBG("pid %d exit %lld", pid, tcb.regs.rdi);
+		detached(tcb, tcb.regs.rdi);
+		if (gstate.tcbs.empty()) {
+			terminate();
+		}
+		return;
 	}
 
 #define ABI_RED_ZONE_SIZE	128
