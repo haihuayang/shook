@@ -81,6 +81,13 @@ def dissect_openat(stracer, pid, retval, scno, *args):
 	else:
 		return ''
 
+def dissect_newfstatat(stracer, pid, retval, scno, *args):
+	if retval is None:
+		dirfd, path, statbuf, flags = args
+		return '%d, "%s", 0x%x, 0x%x' % (dirfd, shook.peek_path(pid, path), statbuf, flags)
+	else:
+		return ''
+
 def dissect_mkdir(stracer, pid, retval, scno, *args):
 	if retval is None:
 		path, mode = args
@@ -92,6 +99,13 @@ def dissect_stat(stracer, pid, retval, scno, *args):
 	if retval is None:
 		path, statbuf = args
 		return '"%s", 0x%x' % (shook.peek_path(pid, path), statbuf)
+	else:
+		return ''
+
+def dissect_fstat(stracer, pid, retval, scno, *args):
+	if retval is None:
+		fd, statbuf = args
+		return '%d, 0x%x' % (fd, statbuf)
 	else:
 		return ''
 
@@ -250,10 +264,24 @@ def dissect_getxattr(stracer, pid, retval, scno, *args):
 	else:
 		return ''
 
+def dissect_fgetxattr(stracer, pid, retval, scno, *args):
+	if retval is None:
+		fd, name, value, size = args
+		return '%d, "%s", 0x%x, %d' % (fd, shook.peek_path(pid, name), value, size)
+	else:
+		return ''
+
 def dissect_setxattr(stracer, pid, retval, scno, *args):
 	if retval is None:
 		path, name, value, size, flags = args
 		return '"%s", "%s", 0x%x, %d, 0x%x' % (shook.peek_path(pid, path), shook.peek_path(pid, name), value, size, flags)
+	else:
+		return ''
+
+def dissect_fsetxattr(stracer, pid, retval, scno, *args):
+	if retval is None:
+		fd, name, value, size, flags = args
+		return '%d, "%s", 0x%x, %d, 0x%x' % (fd, shook.peek_path(pid, name), value, size, flags)
 	else:
 		return ''
 
@@ -293,6 +321,13 @@ def dissect_ppoll(stracer, pid, retval, scno, *args):
 	else:
 		return ''
 
+def dissect_umask(stracer, pid, retval, scno, *args):
+	if retval is None:
+		mode, = args
+		return '0x%x' % mode
+	else:
+		return ''
+
 def dissect_default(stracer, pid, retval, scno, *args):
 	if retval is None:
 		return ', '.join(['%d' % arg for arg in args])
@@ -312,12 +347,20 @@ class Stracer(object):
 		shook.SYS_openat: dissect_openat,
 		shook.SYS_mkdir: dissect_mkdir,
 		shook.SYS_unlink: dissect_unlink,
+		shook.SYS_rmdir: dissect_unlink,
 		shook.SYS_stat: dissect_stat,
+		shook.SYS_lstat: dissect_stat,
+		shook.SYS_fstat: dissect_fstat,
+		shook.SYS_newfstatat: dissect_newfstatat,
 		shook.SYS_statfs: dissect_stat, # TODO
 		shook.SYS_access: dissect_access,
 		shook.SYS_faccessat: dissect_faccessat,
 		shook.SYS_getxattr: dissect_getxattr,
+		shook.SYS_lgetxattr: dissect_getxattr,
+		shook.SYS_fgetxattr: dissect_fgetxattr,
 		shook.SYS_setxattr: dissect_setxattr,
+		shook.SYS_lsetxattr: dissect_setxattr,
+		shook.SYS_fsetxattr: dissect_fsetxattr,
 		shook.SYS_readlink: dissect_readlink,
 		shook.SYS_socket: dissect_socket,
 		shook.SYS_connect: dissect_connect_bind,
