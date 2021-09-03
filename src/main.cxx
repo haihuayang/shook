@@ -1110,4 +1110,6 @@ int shook_set_gdb(pid_t pid)
 	return 0;
 }
 
-
+#ifdef __SANITIZE_ADDRESS__
+// const char* __asan_default_options() { return "detect_leaks=0"; }
+#endif
