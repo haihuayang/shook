@@ -118,22 +118,54 @@ enum {
 	SHOOK_ACTION_MAX,
 };
 
+static inline PyObject *py_incref(PyObject *o)
+{
+	assert(o->ob_refcnt > 0);
+	Py_INCREF(o);
+	return o;
+}
+
+static inline void py_decref(PyObject *o)
+{
+	assert(o->ob_refcnt > 0);
+	Py_DECREF(o);
+}
+
+static inline PyObject *py_xincref(PyObject *o)
+{
+	return o ? py_incref(o) : o;
+}
+
+static inline void py_xdecref(PyObject *o)
+{
+	if (o) {
+		py_decref(o);
+	}
+}
+
+#define py_xcheckref(obj) assert(!(obj) || (obj)->ob_refcnt > 0)
+
 struct pyobj_t
 {
 	explicit pyobj_t(PyObject *o = nullptr) : obj(o) {
+		py_xcheckref(obj);
 	}
 
-	pyobj_t(const pyobj_t &o): obj(o.obj) {
-		Py_XINCREF(obj);
+	pyobj_t(pyobj_t &&o): obj(o.obj) {
+		o.obj = nullptr;
+	}
+
+	pyobj_t(const pyobj_t &o): obj(py_xincref(o.obj)) {
 	}
 
 	~pyobj_t() {
-		Py_XDECREF(obj);
+		py_xdecref(obj);
 	}
 
 	pyobj_t &operator=(PyObject *o) {
+		py_xcheckref(o);
 		if (obj != o) {
-			Py_XDECREF(obj);
+			py_xdecref(obj);
 			obj = o;
 		}
 		return *this;
@@ -141,9 +173,8 @@ struct pyobj_t
 
 	pyobj_t &operator=(const pyobj_t &o) {
 		if (obj != o.obj) {
-			Py_XDECREF(obj);
-			obj = o.obj;
-			Py_XINCREF(obj);
+			py_xdecref(obj);
+			obj = py_xincref(o.obj);
 		}
 		return *this;
 	}
@@ -157,7 +188,7 @@ struct pyobj_t
 	}
 
 private:
-	PyObject *obj;
+	PyObject *obj = nullptr;
 };
 
 struct context_t
@@ -166,11 +197,11 @@ struct context_t
 	unsigned int scno;
 	unsigned int argc;
 	unsigned long suspend_time; // in milliseconds
-	unsigned int signo;
+	unsigned int signo{};
 	long retval;
 	long args[6];
 
-	int state;
+	int state{};
 	int signal_depth = 0;
 	bool modified = false;
 	pyobj_t last_retval, last_args;

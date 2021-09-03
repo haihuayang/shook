@@ -49,14 +49,6 @@ static signal_ent_t g_signal_ent[] = {
 #undef X
 };
 
-static inline PyObject *py_incref(PyObject *po)
-{
-	Py_INCREF(po);
-	return po;
-}
-
-#define None_obj (Py_INCREF(Py_None), Py_None)
-
 static void py_print_err(void)
 {
 	PyErr_Print();
@@ -738,9 +730,7 @@ static PyObject *shook_py_syscall_name(PyObject *self, PyObject *args)
 		return NULL;
 	}
 
-	PyObject *po = g_syscall_ent[syscall].po_name;
-	Py_INCREF(po);
-	return po;
+	return py_incref(g_syscall_ent[syscall].po_name);
 }
 
 static PyObject *shook_py_signal_name(PyObject *self, PyObject *args)
@@ -754,9 +744,7 @@ static PyObject *shook_py_signal_name(PyObject *self, PyObject *args)
 		return NULL;
 	}
 
-	PyObject *po = g_signal_ent[signo].po_name;
-	Py_INCREF(po);
-	return po;
+	return py_incref(g_signal_ent[signo].po_name);
 }
 
 static PyObject *shook_py_clock_gettime(PyObject *self, PyObject *args)
@@ -792,27 +780,18 @@ struct py_timer_t
 {
 	py_timer_t(uint32_t id_, PyObject *cb_, PyObject *args_) : id(id_), callback(cb_), args(args_) {
 		ya_timer_init(&timer, py_timer_func);
-		Py_INCREF(callback);
-		Py_INCREF(args);
 	}
 
 	py_timer_t(const py_timer_t &) = delete;
 
 	py_timer_t(py_timer_t &&o) : timer(o.timer), id(std::move(o.id)),
-	callback(std::move(o.callback)), args(std::move(o.args)) {
-		Py_INCREF(callback);
-		Py_INCREF(args);
-	}
-
-	~py_timer_t() {
-		Py_DECREF(callback);
-		Py_DECREF(args);
+			callback(std::move(o.callback)), args(std::move(o.args)) {
 	}
 
 	ya_timer_t timer;
 	uint32_t const id;
-	PyObject * const callback;
-	PyObject * const args;
+	pyobj_t const callback;
+	pyobj_t const args;
 };
 
 static std::unordered_map<uint32_t, py_timer_t> g_timer_table;
@@ -821,11 +800,10 @@ static uint32_t g_next_timer_id;
 static ya_tick_diff_t py_timer_func(ya_timer_t *timer, ya_tick_t now)
 {
 	py_timer_t *pyt = container_of(timer, py_timer_t, timer);
-	PyObject *po_id = PyInt_FromLong(pyt->id);
-	PyObject *po_ret = PyObject_CallFunctionObjArgs(pyt->callback, po_id, pyt->args, NULL);
-	Py_DECREF(po_id);
+	pyobj_t po_id{PyInt_FromLong(pyt->id)};
+	pyobj_t po_ret{PyObject_CallFunctionObjArgs(pyt->callback, po_id, pyt->args, NULL)};
 
-	if (po_ret == NULL) {
+	if (!po_ret) {
 		py_print_err();
 		g_timer_table.erase(pyt->id);
 		return -1;
@@ -838,7 +816,6 @@ static ya_tick_diff_t py_timer_func(ya_timer_t *timer, ya_tick_t now)
 		assert(milliseconds >= 0);
 		return milliseconds;
 	}
-	Py_DECREF(po_ret);
 }
 
 static PyObject *shook_py_set_timer(PyObject *self, PyObject *args)
@@ -863,8 +840,6 @@ static PyObject *shook_py_set_timer(PyObject *self, PyObject *args)
 
 	auto it = g_timer_table.emplace(id, py_timer_t(id, callback, cb_args));
 	shook_set_timer(&it.first->second.timer, milli_seconds);
-	Py_DECREF(callback);
-	Py_DECREF(cb_args);
 
 	PyObject *po_ret = PyInt_FromLong(it.first->second.id);
 	return po_ret;
@@ -1284,11 +1259,10 @@ int shook_py_emit_leave_signal(bool abort_on_error, pid_t pid, context_t &ctx)
 			action = PyInt_AsLong(PyTuple_GET_ITEM((PyObject *)po_ret, 0));
 			if (action == SHOOK_ACTION_RETURN) {
 				TODO_assert(len == 2);
-				PyObject *new_signo = PyTuple_GET_ITEM((PyObject *)po_ret, 1);
-				Py_XINCREF(new_signo);
+				PyObject *new_signo = py_incref(PyTuple_GET_ITEM((PyObject *)po_ret, 1));
 				PyObject *old_signo = PyTuple_GET_ITEM((PyObject *)ctx.last_args, 1);
 				PyTuple_SET_ITEM((PyObject *)ctx.last_args, 1, new_signo);
-				Py_XDECREF(old_signo);
+				py_decref(old_signo);
 				ctx.modified = true;
 				action = SHOOK_ACTION_NONE;
 			} else if (action == SHOOK_ACTION_GDB || action == SHOOK_ACTION_DETACH) {
@@ -1403,9 +1377,10 @@ int shook_py_emit_leave_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
 		}
 
 		pyobj_t po_args = ctx.stack.back();
+		assert(po_args);
 		ctx.stack.pop_back();
 
-		Py_DECREF(PyTuple_GET_ITEM((PyObject *)po_args, 1));
+		py_decref(PyTuple_GET_ITEM((PyObject *)po_args, 1));
 		PyTuple_SET_ITEM((PyObject *)po_args, 1, py_incref(ctx.last_retval));
 
 		pyobj_t po_ret(PyObject_Call(observers[ctx.stack.size()], po_args, NULL));
@@ -1476,9 +1451,9 @@ int shook_py_emit_process(bool abort_on_error, pid_t pid, unsigned int pt, int p
 		CALL_OBSERVER(*rit, po_pid, po_pt, po_ppid, NULL);
 	}
 
-	Py_DECREF(po_ppid);
-	Py_DECREF(po_pt);
-	Py_DECREF(po_pid);
+	py_decref(po_ppid);
+	py_decref(po_pt);
+	py_decref(po_pid);
 	return 0;
 }
 
