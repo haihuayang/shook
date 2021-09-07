@@ -14,12 +14,11 @@ static const char * const level_name[] = {
 
 unsigned int loglevel = LOG_INFO;
 static int logfd = 2;
-static char g_logbuf[8192];
-static int g_loglen = 0;
 
 void shook_log(int level, const char *fmt, ...)
 {
-	char *p = g_logbuf, *end = p + sizeof(g_logbuf) - 1; // 1 byte for \n
+	char logbuf[1024];
+	char *p = logbuf, *end = p + sizeof(logbuf) - 1; // 1 byte for \n
 	struct tm tm_now;
 	struct timeval tv_now;
 	gettimeofday(&tv_now, NULL);
@@ -47,7 +46,7 @@ void shook_log(int level, const char *fmt, ...)
 
 output:
 	*p++ = '\n';
-	write(logfd, g_logbuf, p - g_logbuf);
+	write(logfd, logbuf, p - logbuf);
 	return;
 
 truncated:
@@ -71,30 +70,33 @@ bool shook_output_init(const char *file, unsigned int level)
 	return true;
 }
 
+static char g_write_buf[8192];
+static int g_write_len = 0;
+
 void shook_write(int stream, const char *str)
 {
 	const char *eol = strrchr(str, '\n');
 	if (eol) {
-		if (g_loglen > 0) {
-			write(logfd, g_logbuf, g_loglen);
-			g_loglen = 0;
+		if (g_write_len > 0) {
+			write(logfd, g_write_buf, g_write_len);
+			g_write_len = 0;
 		}
 		write(logfd, str, eol + 1 - str);
 		size_t len = strlen(eol + 1);
-		if (len < sizeof(g_logbuf)) {
-			strcpy(g_logbuf, eol + 1);
-			g_loglen = len;
+		if (len < sizeof(g_write_buf)) {
+			strcpy(g_write_buf, eol + 1);
+			g_write_len = len;
 		} else {
 			write(logfd, eol + 1, len);
 		}
 	} else {
 		size_t len = strlen(str);
-		if (len + g_loglen < sizeof(g_logbuf)) {
-			strcpy(g_logbuf + g_loglen, str);
-			g_loglen += len;
+		if (len + g_write_len < sizeof(g_write_buf)) {
+			strcpy(g_write_buf + g_write_len, str);
+			g_write_len += len;
 		} else {
-			write(logfd, g_logbuf, g_loglen);
-			g_loglen = 0;
+			write(logfd, g_write_buf, g_write_len);
+			g_write_len = 0;
 			write(logfd, str, len);
 		}
 	}

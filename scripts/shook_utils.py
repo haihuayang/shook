@@ -24,27 +24,27 @@ class FD(object):
 	def on_ioctl(self, pid, fd, op, val):
 		return None
 	def on_fionread(self, pid):
-		assert False
+		raise NotImplementedError('on_fionread')
 	def on_read(self, pid, retval, fd, addr, length):
-		assert False
+		raise NotImplementedError('on_read')
 	def on_readv(self, pid, retval, fd, iov, iovcnt):
-		assert False
+		raise NotImplementedError('on_readv')
 	def on_recvfrom(self, pid, retval, fd, addr, length, flags, src_addr, addrlen):
-		assert False
+		raise NotImplementedError('on_recvfrom')
 	def on_write(self, pid, retval, fd, addr, length):
-		assert False
+		raise NotImplementedError('on_write')
 	def on_writev(self, pid, retval, fd, iov, iovcnt):
-		assert False
+		raise NotImplementedError('on_writev')
 	def on_sendto(self, pid, retval, fd, addr, length, flags, src_addr, addrlen):
-		assert False
+		raise NotImplementedError('on_sendto')
 	def on_close(self, pid, fd):
 		pass
 
 class Pollable(object):
 	def want_recv(self, fd):
-		assert False
+		raise NotImplementedError('want_recv')
 	def want_send(self, fd):
-		assert False
+		raise NotImplementedError('want_send')
 
 class RMemIO:
 	def __init__(self, pid, iovec):
@@ -236,7 +236,7 @@ class TraceeMgmt__:
 			report('PID', pid, 'cloned by', ppid)
 			self.cloned(ppid, pid)
 		else:
-			assert False
+			assert False, f"invalid event {event}"
 
 	def syscall_hook(self, pid, retval, scno, *args):
 		if scno == shook.SYS_close:
@@ -478,7 +478,7 @@ class TraceeMgmt__:
 				if revents != 0:
 					retval += 1
 			self.dprint('rewrite ret pollfds', pollfd, ret_pollfd, new_pollfd, retval)
-			assert len(new_pollfd) == nfds
+			assert len(new_pollfd) == nfds, "len(%s) != %d" % (new_pollfd, nfds)
 			shook.poke_pollfd(pid, fds, *new_pollfd)
 			return shook.ACTION_RETURN, retval
 		else:
