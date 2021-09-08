@@ -33,6 +33,14 @@ extern "C" {
 
 #define TODO_assert assert
 
+#define XSTR(s) #s
+#define XSTR2(s) XSTR(s)
+
+#ifndef __location__
+#define __location__ __FILE__ ":" XSTR2(__LINE__)
+#endif
+
+
 enum {
 	LOG_FATAL,
 	LOG_ERROR,
