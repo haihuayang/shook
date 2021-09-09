@@ -72,6 +72,17 @@ enum class tcb_life_state_t : uint8_t {
 	S_4, // dead (S_2,S_3 ->)
 };
 
+struct unw_t
+{
+	~unw_t() {
+		if (unw_addr_space) {
+			unw_destroy_addr_space(unw_addr_space);
+		}
+	}
+
+	unw_addr_space_t unw_addr_space = nullptr;
+};
+
 struct tcb_t
 {
 	tcb_t(pid_t pid_, unsigned int pt, unsigned ppid, uint32_t flags)
@@ -91,12 +102,29 @@ struct tcb_t
 	// long next_retval;
 	long tmp_mem_addr;
 
+	/* TODO should reflesh addr space cache after execve? */
+	std::shared_ptr<unw_t> uas;
 	struct UPT_info *unw_info = nullptr;
-	// unsigned long wakeup_time;
+
 	struct user_regs_struct regs;
 
 	context_t context;
 };
+
+static int init_unw_cursor(unw_cursor_t &cursor, tcb_t &tcb)
+{
+	if (!tcb.unw_info) {
+		if (!tcb.uas->unw_addr_space) {
+			tcb.uas->unw_addr_space = unw_create_addr_space(&_UPT_accessors, 0);
+			assert(tcb.uas->unw_addr_space);
+			unw_set_caching_policy(tcb.uas->unw_addr_space, UNW_CACHE_GLOBAL);
+		}
+		tcb.unw_info = (struct UPT_info *)_UPT_create(tcb.pid);
+		TODO_assert(tcb.unw_info);
+	}
+
+	return unw_init_remote(&cursor, tcb.uas->unw_addr_space, tcb.unw_info);
+}
 
 static const unsigned int syscall_trap_sig = SIGTRAP | 0x80;
 
@@ -118,8 +146,6 @@ struct gstate_t
 	unsigned int exit_code = 0;
 
 	ya_timer_t exiting_timer;
-
-	unw_addr_space_t unw_addr_space;
 };
 
 static gstate_t gstate;
@@ -145,7 +171,9 @@ static int detach(pid_t pid)
 		}
 		assert(errno == ESRCH);
 		err = ptrace(PTRACE_INTERRUPT, pid, 0, 0);
-		assert(err == 0);
+		if (err < 0) {
+			FATAL("PTRACE_INTERRUPT %d errno %d", pid, errno);
+		}
 	}
 	return 0;
 }
@@ -220,6 +248,7 @@ static void detached(tcb_t &tcb, unsigned int exit_code)
 	}
 
 	emit_process(tcb.pid, SHOOK_PROCESS_DETACHED, 0);
+
 	if (tcb.unw_info) {
 		_UPT_destroy(tcb.unw_info);
 		tcb.unw_info = nullptr;
@@ -305,24 +334,31 @@ static tcb_t &tcb_create(pid_t pid, unsigned int type, pid_t create_pid,
 	return ret.first->second;
 }
 
-static tcb_t &trace_new_proc(const char *location, pid_t pid, unsigned int type, pid_t create_pid,
-		uint32_t flags)
+static void trace_new_proc(const char *location, pid_t pid, unsigned int type,
+		tcb_t &create_tcb)
 {
 	LOG(LOG_INFO, "%s trace_new_proc pid=%d, type=%d, creator=%d, flags=0x%x",
 			location,
-			pid, type, create_pid,
-			flags);
-	auto &tcb = tcb_create(pid, type, create_pid, flags);
+			pid, type, create_tcb.pid,
+			create_tcb.flags & FLAG_CREATED);
+	auto &tcb = tcb_create(pid, type, create_tcb.pid, create_tcb.flags & FLAG_CREATED);
+	tcb.life_state = tcb_life_state_t::S_1;
+
 	if (gstate.aborted) {
 		exit_detach(tcb, SIGTERM);
 	} else {
-		emit_process(pid, type, create_pid);
+		if (type == SHOOK_PROCESS_CLONE) {
+			tcb.uas = create_tcb.uas;
+		} else {
+			tcb.uas = std::make_shared<unw_t>();
+		}
+		emit_process(pid, type, create_tcb.pid);
 	}
-	return tcb;
 }
 
-static void trace_exist_proc(const char *location, pid_t pid,
-		uint32_t type, pid_t create_pid, uint32_t flags)
+static tcb_t &trace_exist_proc(const char *location, pid_t pid,
+		uint32_t type, pid_t create_pid, uint32_t flags,
+		const std::shared_ptr<unw_t> &unw)
 {
 	LOG(LOG_INFO, "%s trace_exist_proc pid=%d, type=%d, creator=%d, flags=0x%x",
 			location,
@@ -330,21 +366,29 @@ static void trace_exist_proc(const char *location, pid_t pid,
 			flags);
 	auto &tcb = tcb_create(pid, type, create_pid, flags);
 	tcb.life_state = tcb_life_state_t::S_2;
+	tcb.uas = unw;
 	emit_process(pid, type, create_pid);
+	return tcb;
 }
 
-static void update_proc(const char *location, tcb_t &tcb, pid_t pid, unsigned int type, pid_t create_pid, uint32_t flags)
+static void update_proc(const char *location, tcb_t &tcb, pid_t pid, unsigned int type,
+		tcb_t &create_tcb)
 {
 	if (tcb.process_type == SHOOK_PROCESS_UNKNOWN) {
 		LOG(LOG_INFO, "%s update_proc pid=%d, old_type=%d, type=%d, creator=%d",
-				location, pid, tcb.process_type, type, create_pid);
+				location, pid, tcb.process_type, type, create_tcb.pid);
 		tcb.process_type = type;
-		tcb.create_pid = pid;
-		tcb.flags |= flags;
-		emit_process(pid, type, create_pid);
+		tcb.create_pid = create_tcb.pid;
+		tcb.flags |= (create_tcb.flags & FLAG_CREATED);
+		if (type == SHOOK_PROCESS_CLONE) {
+			tcb.uas = create_tcb.uas;
+		} else {
+			tcb.uas = std::make_shared<unw_t>();
+		}
+		emit_process(pid, type, create_tcb.pid);
 	} else if (tcb.process_type != type) {
 		LOG(LOG_ERROR, "%s update_proc pid=%d, old_type=%d, type=%d, creator=%d",
-				location, pid, tcb.process_type, type, create_pid);
+				location, pid, tcb.process_type, type, create_tcb.pid);
 	}
 }
 
@@ -629,14 +673,13 @@ static void trace(pid_t pid, unsigned int status, tcb_t &tcb, ya_tick_t now)
 		DBG("event %d pid %d new_pid %ld", event, pid, new_pid);
 		auto new_it_tcb = gstate.tcbs.find(new_pid);
 		if (new_it_tcb == gstate.tcbs.end()) {
-			auto &new_tcb = TRACE_NEW_PROC(new_pid, type, pid, tcb.flags & FLAG_CREATED);
-			new_tcb.life_state = tcb_life_state_t::S_1;
+			TRACE_NEW_PROC(new_pid, type, tcb);
 		} else {
 			auto &new_tcb = new_it_tcb->second;
 			assert(new_tcb.life_state == tcb_life_state_t::S_0);
 			new_tcb.life_state = tcb_life_state_t::S_1;
 
-			UPDATE_PROC(new_tcb, new_pid, type, pid, tcb.flags & FLAG_CREATED);
+			UPDATE_PROC(new_tcb, new_pid, type, tcb);
 			if (new_tcb.save_status != 0) {
 				/* trigger the saved event for new_pid */
 				trace(new_pid, new_tcb.save_status, new_it_tcb->second, now);
@@ -716,13 +759,6 @@ restart_tracee:
 	}
 }
 
-static void init_unwind(void)
-{
-	gstate.unw_addr_space = unw_create_addr_space(&_UPT_accessors, 0);
-	assert(gstate.unw_addr_space);
-	unw_set_caching_policy(gstate.unw_addr_space, UNW_CACHE_GLOBAL);
-}
-
 static int create_signalfd()
 {
         sigset_t mask;
@@ -742,8 +778,6 @@ static int create_signalfd()
 static int run_shook(int start_pid, const std::vector<int> &pid_attach,
 		int argc, char **argv)
 {
-	init_unwind();
-
         gstate.signalfd = create_signalfd();
         if (gstate.signalfd < 0) {
 		FATAL("signalfd, errno=%d", errno);
@@ -756,7 +790,8 @@ static int run_shook(int start_pid, const std::vector<int> &pid_attach,
 	}
 
 	if (start_pid > 0) {
-		TRACE_EXIST_PROC(start_pid, SHOOK_PROCESS_CREATED, 0, FLAG_CREATED);
+		TRACE_EXIST_PROC(start_pid, SHOOK_PROCESS_CREATED, 0, FLAG_CREATED,
+				std::make_shared<unw_t>());
 	}
 
 	for (auto pid: pid_attach) {
@@ -772,7 +807,7 @@ static int run_shook(int start_pid, const std::vector<int> &pid_attach,
 		if (!gstate.enable_vdso) {
 			shook_disable_vdso(pid, 0);
 		}
-		TRACE_EXIST_PROC(pid, SHOOK_PROCESS_ATTACHED, 0, 0);
+		auto &tcb = TRACE_EXIST_PROC(pid, SHOOK_PROCESS_ATTACHED, 0, 0, std::make_shared<unw_t>());
 
 		char proc_buf[80];
 		snprintf(proc_buf, sizeof proc_buf, "/proc/%d/task", pid);
@@ -798,7 +833,7 @@ static int run_shook(int start_pid, const std::vector<int> &pid_attach,
 			}
 			err = ptrace(PTRACE_INTERRUPT, tpid, 0, 0);
 			assert(err == 0);
-			TRACE_EXIST_PROC(tpid, SHOOK_PROCESS_CLONE, pid, 0);
+			TRACE_EXIST_PROC(tpid, SHOOK_PROCESS_CLONE, pid, 0, tcb.uas);
 		}
 		closedir(dir);
 	}
@@ -1121,14 +1156,9 @@ int shook_backtrace(std::vector<stackframe_t> &stacks, pid_t pid, unsigned int d
 	auto it = gstate.tcbs.find(pid);
 	TODO_assert(it != gstate.tcbs.end());
 
-	tcb_t &tcb = it->second;
-	if (!tcb.unw_info) {
-		tcb.unw_info = (struct UPT_info *)_UPT_create(pid);
-		TODO_assert(tcb.unw_info);
-	}
-
 	unw_cursor_t cursor;
-	int err = unw_init_remote(&cursor, gstate.unw_addr_space, tcb.unw_info);
+	int err = init_unw_cursor(cursor, it->second);
+
 	TODO_assert(err >= 0);
 	for (unsigned int d = 0; depth == 0 || d < depth; ++d) {
 		unw_word_t ip;

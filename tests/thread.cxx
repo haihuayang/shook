@@ -6,7 +6,9 @@
 
 static void *thread_func(void *arg)
 {
-	sleep(1000);
+	while (1) {
+		sleep(1);
+	}
 	return nullptr;
 }
 
