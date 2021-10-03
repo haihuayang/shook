@@ -144,6 +144,7 @@ struct gstate_t
 	bool exiting = false;
 	pid_t start_pid = -1;
 	unsigned int exit_code = 0;
+	unsigned int exit_timeout_ms = 5000;
 
 	ya_timer_t exiting_timer;
 };
@@ -212,7 +213,7 @@ static void exiting()
 		exit_detach(it.second, SIGTERM);
 	}
 	ya_timer_init(&gstate.exiting_timer, exiting_timer_func);
-	shook_set_timer(&gstate.exiting_timer, YA_TICK_FROM_MSEC(5000));
+	shook_set_timer(&gstate.exiting_timer, YA_TICK_FROM_MSEC(gstate.exit_timeout_ms));
 }
 
 static void shook_abort()
@@ -941,6 +942,44 @@ Usage: shook [-o output] [-bg] [-enable-vdso] [-p pid] -x script ... [-- command
 	*(a); \
 })
 
+static unsigned int parse_loglevel(const char *arg)
+{
+	static const struct {
+		const char *name;
+		int val;
+	} pairs[] = {
+		{ "warn", LOG_WARN, },
+		{ "info", LOG_INFO, },
+		{ "debug", LOG_DEBUG, },
+		{ "verb", LOG_VERB, },
+	};
+
+	for (auto &pair: pairs) {
+		if (strcmp(arg, pair.name) == 0) {
+			return pair.val;
+		}
+	}
+
+	char *end;
+	unsigned long ret = strtoul(arg, &end, 0);
+	if (*end) {
+		USAGE("Error: Invalid loglevel value %s.", arg);
+	}
+	return ret;
+}
+
+static void init_gstate()
+{
+	const char *env;
+	char *end;
+
+	env = getenv("SHOOK_EXIT_TIMEOUT");
+	if (env && *env) {
+		unsigned long val = strtoul(env, &end, 0);
+		gstate.exit_timeout_ms = val;
+	}
+}
+
 int main(int argc, char **argv)
 {
 	// const char *progname = argv[0];
@@ -953,6 +992,9 @@ int main(int argc, char **argv)
 	std::vector<int> pid_attach;
 	bool background = false;
 	bool dosleep = false;
+
+	init_gstate();
+
 	for ( ; *argv; ++argv) {
 		if (false) {
 			/* placeholder */
@@ -977,7 +1019,9 @@ int main(int argc, char **argv)
 		} else if (strcmp(*argv, "-o") == 0) {
 			output = NEXT_ARG(argv);
 		} else if (strcmp(*argv, "-loglevel") == 0) {
-			loglevel = atoi(NEXT_ARG(argv));
+			loglevel = parse_loglevel(NEXT_ARG(argv));
+		} else if (strcmp(*argv, "-exit-timeout") == 0) {
+			gstate.exit_timeout_ms = atoi(NEXT_ARG(argv));
 		} else if (strcmp(*argv, "-p") == 0) {
 			int pid = atoi(NEXT_ARG(argv));
 			if (pid <= 0) {
