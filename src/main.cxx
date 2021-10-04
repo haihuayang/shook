@@ -65,11 +65,9 @@ enum class tcb_trace_state_t : uint8_t {
 };
 
 enum class tcb_life_state_t : uint8_t {
-	S_0, // initialized
-	S_1, // parent get process event (S_0->)
-	S_2, // parent return from syscall (S_1->)
-	S_3, // detached from S_1, wait for parent return from system
-	S_4, // dead (S_2,S_3 ->)
+	S_INIT,
+	S_READY,
+	S_DEAD,
 };
 
 struct unw_t
@@ -92,7 +90,7 @@ struct tcb_t
 	}
 
 	const pid_t pid;
-	tcb_life_state_t life_state = tcb_life_state_t::S_0;
+	tcb_life_state_t life_state = tcb_life_state_t::S_INIT;
 	tcb_trace_state_t trace_state = tcb_trace_state_t::S_NONE;
 	uint32_t flags = FLAG_STARTUP | FLAG_ENTERING | FLAG_IGNORE_ONE_SIGSTOP;
 	unsigned int process_type, create_pid;
@@ -254,12 +252,8 @@ static void detached(tcb_t &tcb, unsigned int exit_code)
 		_UPT_destroy(tcb.unw_info);
 		tcb.unw_info = nullptr;
 	}
-
-	if (tcb.life_state == tcb_life_state_t::S_2) {
-		gstate.tcbs.erase(tcb.pid);
-	} else if (tcb.life_state == tcb_life_state_t::S_1) {
-		tcb.life_state = tcb_life_state_t::S_3;
-	}
+	assert(tcb.life_state == tcb_life_state_t::S_READY);
+	gstate.tcbs.erase(tcb.pid);
 }
 
 static void check_pid_changed(tcb_t &tcb, pid_t pid)
@@ -338,12 +332,12 @@ static tcb_t &tcb_create(pid_t pid, unsigned int type, pid_t create_pid,
 static void trace_new_proc(const char *location, pid_t pid, unsigned int type,
 		tcb_t &create_tcb)
 {
-	LOG(LOG_INFO, "%s trace_new_proc pid=%d, type=%d, creator=%d, flags=0x%x",
-			location,
+	auto &tcb = tcb_create(pid, type, create_tcb.pid, create_tcb.flags & FLAG_CREATED);
+	LOG(LOG_INFO, "%s trace_new_proc %p pid=%d, type=%d, creator=%d, flags=0x%x",
+			location, &tcb,
 			pid, type, create_tcb.pid,
 			create_tcb.flags & FLAG_CREATED);
-	auto &tcb = tcb_create(pid, type, create_tcb.pid, create_tcb.flags & FLAG_CREATED);
-	tcb.life_state = tcb_life_state_t::S_1;
+	tcb.life_state = tcb_life_state_t::S_READY;
 
 	if (gstate.aborted) {
 		exit_detach(tcb, SIGTERM);
@@ -361,12 +355,12 @@ static tcb_t &trace_exist_proc(const char *location, pid_t pid,
 		uint32_t type, pid_t create_pid, uint32_t flags,
 		const std::shared_ptr<unw_t> &unw)
 {
-	LOG(LOG_INFO, "%s trace_exist_proc pid=%d, type=%d, creator=%d, flags=0x%x",
-			location,
+	auto &tcb = tcb_create(pid, type, create_pid, flags);
+	LOG(LOG_INFO, "%s trace_exist_proc %p pid=%d, type=%d, creator=%d, flags=0x%x",
+			location, &tcb,
 			pid, type, create_pid,
 			flags);
-	auto &tcb = tcb_create(pid, type, create_pid, flags);
-	tcb.life_state = tcb_life_state_t::S_2;
+	tcb.life_state = tcb_life_state_t::S_READY;
 	tcb.uas = unw;
 	emit_process(pid, type, create_pid);
 	return tcb;
@@ -376,8 +370,8 @@ static void update_proc(const char *location, tcb_t &tcb, pid_t pid, unsigned in
 		tcb_t &create_tcb)
 {
 	if (tcb.process_type == SHOOK_PROCESS_UNKNOWN) {
-		LOG(LOG_INFO, "%s update_proc pid=%d, old_type=%d, type=%d, creator=%d",
-				location, pid, tcb.process_type, type, create_tcb.pid);
+		LOG(LOG_INFO, "%s update_proc %p pid=%d, old_type=%d, type=%d, creator=%d",
+				location, &tcb, pid, tcb.process_type, type, create_tcb.pid);
 		tcb.process_type = type;
 		tcb.create_pid = create_tcb.pid;
 		tcb.flags |= (create_tcb.flags & FLAG_CREATED);
@@ -416,21 +410,9 @@ static void check_new_process_return(pid_t pid, tcb_t &tcb, context_t &ctx)
 		new_proc_type = SHOOK_PROCESS_VFORK;
 	}
 
-	if (new_proc_type != SHOOK_PROCESS_UNKNOWN && ctx.retval > 0) {
-		pid_t new_pid = ctx.retval;
-		auto new_it_tcb = gstate.tcbs.find(new_pid);
-		assert (new_it_tcb != gstate.tcbs.end());
-
-		auto &new_tcb = new_it_tcb->second;
-		DBG("process_return %d new_pid %d, life_state %d", pid, new_pid,
-				int(new_tcb.life_state));
-		if (new_tcb.life_state == tcb_life_state_t::S_1) {
-			new_tcb.life_state = tcb_life_state_t::S_2;
-		} else if (new_tcb.life_state == tcb_life_state_t::S_3) {
-			gstate.tcbs.erase(new_it_tcb);
-		} else {
-			assert(false);
-		}
+	if (new_proc_type != SHOOK_PROCESS_UNKNOWN) {
+		LOG(LOG_INFO, "process %d %d return new_pid %ld", pid,
+				new_proc_type, ctx.retval);
 	}
 }
 
@@ -671,14 +653,14 @@ static void trace(pid_t pid, unsigned int status, tcb_t &tcb, ya_tick_t now)
 		}
 		unsigned int type = (event == PTRACE_EVENT_CLONE) ? SHOOK_PROCESS_CLONE : 
 			(event == PTRACE_EVENT_FORK) ? SHOOK_PROCESS_FORK : SHOOK_PROCESS_VFORK;
-		DBG("event %d pid %d new_pid %ld", event, pid, new_pid);
+		LOG(LOG_INFO, "event %d pid %d new_pid %ld", event, pid, new_pid);
 		auto new_it_tcb = gstate.tcbs.find(new_pid);
 		if (new_it_tcb == gstate.tcbs.end()) {
 			TRACE_NEW_PROC(new_pid, type, tcb);
 		} else {
 			auto &new_tcb = new_it_tcb->second;
-			assert(new_tcb.life_state == tcb_life_state_t::S_0);
-			new_tcb.life_state = tcb_life_state_t::S_1;
+			assert(new_tcb.life_state == tcb_life_state_t::S_INIT);
+			new_tcb.life_state = tcb_life_state_t::S_READY;
 
 			UPDATE_PROC(new_tcb, new_pid, type, tcb);
 			if (new_tcb.save_status != 0) {
@@ -856,12 +838,14 @@ static int run_shook(int start_pid, const std::vector<int> &pid_attach,
 			if (it_tcb == gstate.tcbs.end()) {
 				// Child process signaled before the parent process,
 				// suspend the process until the event about how it is created
-				if (WIFEXITED(status)) {
-					LOG(LOG_WARN, "pid %d already detached, status=0x%x,%d", pid, status, status);
+				if (WIFEXITED(status) || WIFSIGNALED(status)) {
+					LOG(LOG_WARN, "pid %d already exited, status=0x%x,%d", pid, status, status);
 					continue;
 				}
-				DBG("create tcb for new pid %d, status=0x%x,%d", pid, status, status);
+
 				auto &new_tcb = tcb_create(pid, SHOOK_PROCESS_UNKNOWN, -1, 0);
+				LOG(LOG_INFO, "create tcb %p for new pid %d, status=0x%x,%d",
+						&new_tcb, pid, status, status);
 				new_tcb.save_status = status;
 				continue;
 			}
