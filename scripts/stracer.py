@@ -140,41 +140,49 @@ def dissect_readlink(stracer, pid, retval, scno, *args):
 	else:
 		return ''
 
+def tostring_socket(domain, socktype, protocol):
+	domain_names = (
+		( socket.AF_UNIX, 'AF_UNIX' ),
+		( socket.AF_INET, 'AF_INET' ),
+		( socket.AF_INET6, 'AF_INET6' ),
+		( socket.AF_NETLINK, 'AF_NETLINK' ),
+		( socket.AF_PACKET, 'AF_PACKET' ),
+	)
+	socktype_names = (
+		( socket.SOCK_STREAM, 'SOCK_STREAM' ),
+		( socket.SOCK_DGRAM, 'SOCK_DGRAM' ),
+		( socket.SOCK_SEQPACKET, 'SOCK_SEQPACKET' ),
+		( socket.SOCK_RAW, 'SOCK_RAW' ),
+		# ( socket.SOCK_PACKET, 'SOCK_PACKET' ),
+	)
+	for v, n in domain_names:
+		if domain == v:
+			domain_name = n
+			break
+	else:
+		domain_name = 'AF_%d' % domain
+
+	socktype_low = (socktype & 0xf)
+	for v, n in socktype_names:
+		if socktype_low == v:
+			socktype_name = n
+			break
+	else:
+		socktype_name = 'SOCK_%d' % socktype_low
+	socktype_high = (socktype & 0xfffffff0)
+	if socktype_high != 0:
+		socktype_name = socktype_name + '|0x%x' % socktype_high
+	return domain_name, socktype_name, protocol
+
 def dissect_socket(stracer, pid, retval, scno, *args):
 	if retval is None:
-		domain, socktype, protocol = args
-		domain_names = (
-			( socket.AF_UNIX, 'AF_UNIX' ),
-			( socket.AF_INET, 'AF_INET' ),
-			( socket.AF_INET6, 'AF_INET6' ),
-			( socket.AF_NETLINK, 'AF_NETLINK' ),
-			( socket.AF_PACKET, 'AF_PACKET' ),
-		)
-		socktype_names = (
-			( socket.SOCK_STREAM, 'SOCK_STREAM' ),
-			( socket.SOCK_DGRAM, 'SOCK_DGRAM' ),
-			( socket.SOCK_SEQPACKET, 'SOCK_SEQPACKET' ),
-			( socket.SOCK_RAW, 'SOCK_RAW' ),
-			# ( socket.SOCK_PACKET, 'SOCK_PACKET' ),
-		)
-		for v, n in domain_names:
-			if domain == v:
-				domain_name = n
-				break
-		else:
-			domain_name = 'AF_%d' % domain
+		return '%s, %s, %d' % tostring_socket(*args)
+	else:
+		return ''
 
-		socktype_low = (socktype & 0xf)
-		for v, n in socktype_names:
-			if socktype_low == v:
-				socktype_name = n
-				break
-		else:
-			socktype_name = 'SOCK_%d' % socktype_low
-		socktype_high = (socktype & 0xfffffff0)
-		if socktype_high != 0:
-			socktype_name = socktype_name + '|0x%x' % socktype_high
-		return '%s, %s, %d' % (domain_name, socktype_name, protocol)
+def dissect_socketpair(stracer, pid, retval, scno, *args):
+	if retval is None:
+		return '%s, %s, %d, 0x%x' % (*tostring_socket(*args[:3]), args[3])
 	else:
 		return ''
 
@@ -328,6 +336,24 @@ def dissect_umask(stracer, pid, retval, scno, *args):
 	else:
 		return ''
 
+def dissect_pipe(stracer, pid, retval, scno, *args):
+	if retval is None:
+		return '0x%x' % args[0]
+	elif retval == 0:
+		fd0, fd1 = shook.peek_uint32(pid, args[0], 2)
+		return '[%d, %d]' % (fd0, fd1)
+	else:
+		return ''
+
+def dissect_pipe2(stracer, pid, retval, scno, *args):
+	if retval is None:
+		return '0x%x, 0x%x' % args
+	elif retval == 0:
+		fd0, fd1 = shook.peek_uint32(pid, args[0], 2)
+		return '[%d, %d]' % (fd0, fd1)
+	else:
+		return ''
+
 def dissect_default(stracer, pid, retval, scno, *args):
 	if retval is None:
 		return ', '.join(['%d' % arg for arg in args])
@@ -363,6 +389,7 @@ class Stracer(object):
 		shook.SYS_fsetxattr: dissect_fsetxattr,
 		shook.SYS_readlink: dissect_readlink,
 		shook.SYS_socket: dissect_socket,
+		shook.SYS_socketpair: dissect_socketpair,
 		shook.SYS_connect: dissect_connect_bind,
 		shook.SYS_bind: dissect_connect_bind,
 		shook.SYS_getsockname: dissect_getsock,
@@ -373,6 +400,9 @@ class Stracer(object):
 		shook.SYS_recvmsg: dissect_recvmsg,
 		shook.SYS_poll: dissect_poll,
 		shook.SYS_ppoll: dissect_ppoll,
+		shook.SYS_umask: dissect_umask,
+		shook.SYS_pipe: dissect_pipe,
+		shook.SYS_pipe2: dissect_pipe2,
 	}
 
 	def __init__(self, output):
