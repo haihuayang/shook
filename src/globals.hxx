@@ -89,6 +89,12 @@ long shook_alloc_copy(pid_t pid, const void *data, size_t len);
 void shook_set_timer(ya_timer_t *timer, ya_tick_diff_t milli_seconds);
 void shook_cancel_timer(ya_timer_t *timer);
 
+enum shook_on_exception_t {
+	SHOOK_ON_EXCEPTION_KILL,
+	SHOOK_ON_EXCEPTION_ABORT,
+	SHOOK_ON_EXCEPTION_IGNORE,
+};
+
 enum {
 	SHOOK_ABORT = -1,
 };
@@ -216,11 +222,11 @@ struct context_t
 	std::vector<pyobj_t> stack;
 };
 
-int shook_py_emit_leave_signal(bool abort_on_error, pid_t pid, context_t &context);
-int shook_py_emit_enter_syscall(bool abort_on_error, pid_t pid, context_t &context);
-int shook_py_emit_leave_syscall(bool abort_on_error, pid_t pid, context_t &context);
-int shook_py_emit_process(bool abort_on_error, pid_t pid, unsigned int process_type, int ppid);
-int shook_py_emit_finish(bool abort_on_error);
+int shook_py_emit_leave_signal(shook_on_exception_t on_exception, pid_t pid, context_t &context);
+int shook_py_emit_enter_syscall(shook_on_exception_t on_exception, pid_t pid, context_t &context);
+int shook_py_emit_leave_syscall(shook_on_exception_t on_exception, pid_t pid, context_t &context);
+int shook_py_emit_process(shook_on_exception_t on_exception, pid_t pid, unsigned int process_type, int ppid);
+int shook_py_emit_finish(shook_on_exception_t on_exception);
 
 struct stackframe_t
 {

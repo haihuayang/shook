@@ -148,7 +148,7 @@ struct gstate_t
 };
 
 static gstate_t gstate;
-static bool abort_on_python_exception = false;
+static shook_on_exception_t on_exception = SHOOK_ON_EXCEPTION_IGNORE;
 
 static void detached(tcb_t &tcb, unsigned int exit_code);
 
@@ -236,7 +236,7 @@ static void emit_process(pid_t pid, unsigned int process_type, int ppid)
 		return;
 	}
 
-	int action = shook_py_emit_process(abort_on_python_exception, pid, process_type, ppid);
+	int action = shook_py_emit_process(on_exception, pid, process_type, ppid);
 	CHECK_ABORT(action);
 }
 
@@ -422,7 +422,7 @@ static void emit_leave_signal(pid_t pid, tcb_t &tcb)
 		return;
 	}
 
-	int action = shook_py_emit_leave_signal(abort_on_python_exception, pid, tcb.context);
+	int action = shook_py_emit_leave_signal(on_exception, pid, tcb.context);
 	CHECK_ABORT(action);
 
 	if (action == SHOOK_ACTION_SUSPEND) {
@@ -452,7 +452,7 @@ static void emit_enter_syscall(pid_t pid, tcb_t &tcb)
 		return;
 	}
 
-	int action = shook_py_emit_enter_syscall(abort_on_python_exception, pid, tcb.context);
+	int action = shook_py_emit_enter_syscall(on_exception, pid, tcb.context);
 	CHECK_ABORT(action);
 
 	VERB("-> pid=%d %s", pid, action_name[action]);
@@ -508,7 +508,7 @@ static void emit_leave_syscall(pid_t pid, tcb_t &tcb)
 		shook_disable_vdso(pid, tcb.regs.rsp);
 	}
 
-	int action = shook_py_emit_leave_syscall(abort_on_python_exception, pid, tcb.context);
+	int action = shook_py_emit_leave_syscall(on_exception, pid, tcb.context);
 	CHECK_ABORT(action);
 
 	VERB("<- pid=%d %s", pid, action_name[action]);
@@ -892,7 +892,7 @@ static int run_shook(int start_pid, const std::vector<int> &pid_attach,
 		}
 	}
 
-	shook_py_emit_finish(abort_on_python_exception);
+	shook_py_emit_finish(on_exception);
 	terminate();
 	return 0;
 }
@@ -906,6 +906,8 @@ Usage: shook [-o output] [-bg] [-enable-vdso] [-p pid] -x script ... [-- command
 	-bg		run shook in background
 	-enable-vdso	not intercept vdso functions
 	-p pid		attach the process
+	-on-exception	kill|abort|ignore when python exception raised
+	-loglevel	warn|info|debug|verb
 	-x script ...	python script and the optional arguments
 	command ...	the trace command and its arguments
 )EOF");
@@ -950,6 +952,26 @@ static unsigned int parse_loglevel(const char *arg)
 		USAGE("Error: Invalid loglevel value %s.", arg);
 	}
 	return ret;
+}
+
+static shook_on_exception_t parse_on_exception(const char *arg)
+{
+	static const struct {
+		const char *name;
+		shook_on_exception_t val;
+	} pairs[] = {
+		{ "kill", SHOOK_ON_EXCEPTION_KILL, },
+		{ "abort", SHOOK_ON_EXCEPTION_ABORT, },
+		{ "ignore", SHOOK_ON_EXCEPTION_IGNORE, },
+	};
+
+	for (auto &pair: pairs) {
+		if (strcmp(arg, pair.name) == 0) {
+			return pair.val;
+		}
+	}
+	USAGE("Error: Invalid on-exception value %s.", arg);
+	return SHOOK_ON_EXCEPTION_IGNORE;
 }
 
 static void init_gstate()
@@ -1027,8 +1049,10 @@ int main(int argc, char **argv)
 			background = true;
 		} else if (strcmp(*argv, "-enable-vdso") == 0) {
 			gstate.enable_vdso = true;
+		} else if (strcmp(*argv, "-on-exception") == 0) {
+			on_exception = parse_on_exception(NEXT_ARG(argv));
 		} else if (strcmp(*argv, "-abort") == 0) {
-			abort_on_python_exception = true;
+			on_exception = SHOOK_ON_EXCEPTION_ABORT;
 		} else if (strcmp(*argv, "-sleep") == 0) {
 			dosleep = true;
 		} else if (**argv == '-') {

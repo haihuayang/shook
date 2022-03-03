@@ -1229,7 +1229,7 @@ static PyObject *create_signal_args(pid_t pid, context_t &ctx)
 	return po_args;
 }
 
-int shook_py_emit_leave_signal(bool abort_on_error, pid_t pid, context_t &ctx)
+int shook_py_emit_leave_signal(shook_on_exception_t on_exception, pid_t pid, context_t &ctx)
 {
 	int action = SHOOK_ACTION_NONE;
 	auto &observers = g_observers[SHOOK_EVENT_SIGNAL];
@@ -1244,7 +1244,7 @@ int shook_py_emit_leave_signal(bool abort_on_error, pid_t pid, context_t &ctx)
 		pyobj_t po_ret(PyObject_Call(observers[ctx.signal_depth], ctx.last_args, NULL));
 		if (!po_ret) {
 			py_print_err();
-			if (abort_on_error) {
+			if (on_exception == SHOOK_ON_EXCEPTION_ABORT) {
 				return SHOOK_ABORT;
 			}
 		} else if (po_ret == Py_None) {
@@ -1295,7 +1295,7 @@ static PyObject *create_syscall_args(pid_t pid, context_t &ctx)
 	return po_args;
 }
 
-int shook_py_emit_enter_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
+int shook_py_emit_enter_syscall(shook_on_exception_t on_exception, pid_t pid, context_t &ctx)
 {
 	int action = SHOOK_ACTION_NONE;
 	auto &observers = g_observers[SHOOK_EVENT_SYSCALL];
@@ -1307,7 +1307,10 @@ int shook_py_emit_enter_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
 		pyobj_t po_ret(PyObject_Call(observers[si], ctx.last_args, NULL));
 		if (po_ret == NULL) {
 			py_print_err();
-			if (abort_on_error) {
+			if (on_exception == SHOOK_ON_EXCEPTION_KILL) {
+				ctx.signo = SIGABRT;
+				return SHOOK_ACTION_KILL;
+			} else if (on_exception == SHOOK_ON_EXCEPTION_ABORT) {
 				return SHOOK_ABORT;
 			}
 			ctx.stack.push_back(ctx.last_args);
@@ -1325,6 +1328,9 @@ int shook_py_emit_enter_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
 			PyObject *po_action = PyTuple_GET_ITEM((PyObject *)po_ret, 0);
 			action = PyInt_AsLong(po_action);
 			if (action == SHOOK_ACTION_GDB || action == SHOOK_ACTION_DETACH) {
+				return action;
+			} else if (action == SHOOK_ACTION_KILL) {
+				ctx.signo = PyInt_AsLong(PyTuple_GET_ITEM((PyObject *)po_ret, 1));
 				return action;
 			} else if (action == SHOOK_ACTION_SUSPEND) {
 				ctx.stack.push_back(ctx.last_args);
@@ -1367,7 +1373,7 @@ int shook_py_emit_enter_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
 	return action;
 }
 
-int shook_py_emit_leave_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
+int shook_py_emit_leave_syscall(shook_on_exception_t on_exception, pid_t pid, context_t &ctx)
 {
 	int action = SHOOK_ACTION_NONE;
 	auto &observers = g_observers[SHOOK_EVENT_SYSCALL];
@@ -1386,7 +1392,11 @@ int shook_py_emit_leave_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
 		pyobj_t po_ret(PyObject_Call(observers[ctx.stack.size()], po_args, NULL));
 		if (po_ret == nullptr) {
 			py_print_err();
-			if (abort_on_error) {
+			if (on_exception == SHOOK_ON_EXCEPTION_KILL) {
+				ctx.signo = SIGABRT;
+				action = SHOOK_ACTION_KILL;
+				break;
+			} else if (on_exception == SHOOK_ON_EXCEPTION_ABORT) {
 				return SHOOK_ABORT;
 			}
 		} else if (po_ret == Py_None) {
@@ -1402,6 +1412,8 @@ int shook_py_emit_leave_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
 			action = PyInt_AsLong(po_action);
 			if (action == SHOOK_ACTION_GDB || action == SHOOK_ACTION_DETACH) {
 			} else if (action == SHOOK_ACTION_KILL) {
+				ctx.signo = PyInt_AsLong(PyTuple_GET_ITEM((PyObject *)po_ret, 1));
+				break;
 			} else if (action == SHOOK_ACTION_SUSPEND) {
 				break;
 			} else if (action == SHOOK_ACTION_RETURN) {
@@ -1428,7 +1440,7 @@ int shook_py_emit_leave_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
 	PyObject *ret = PyObject_CallFunctionObjArgs(observer, __VA_ARGS__); \
 	if (ret == NULL) { \
 		py_print_err(); \
-		if (abort_on_error) { \
+		if (on_exception == SHOOK_ON_EXCEPTION_ABORT) { \
 			return SHOOK_ABORT; \
 		} \
 	} else { \
@@ -1436,7 +1448,7 @@ int shook_py_emit_leave_syscall(bool abort_on_error, pid_t pid, context_t &ctx)
 	} \
 } while (0)
 
-int shook_py_emit_process(bool abort_on_error, pid_t pid, unsigned int pt, int ppid)
+int shook_py_emit_process(shook_on_exception_t on_exception, pid_t pid, unsigned int pt, int ppid)
 {
 	auto &observers = g_observers[SHOOK_EVENT_PROCESS];
 	if (observers.empty()) {
@@ -1457,7 +1469,7 @@ int shook_py_emit_process(bool abort_on_error, pid_t pid, unsigned int pt, int p
 	return 0;
 }
 
-int shook_py_emit_finish(bool abort_on_error)
+int shook_py_emit_finish(shook_on_exception_t on_exception)
 {
 	auto &observers = g_observers[SHOOK_EVENT_FINISH];
 	for (auto &ob: observers) {
