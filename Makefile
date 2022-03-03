@@ -7,7 +7,7 @@ GIT_COMMIT := $(shell git describe --abbrev=0 --dirty --always --tags)
 BUILD_DATE := $(shell date '+%Y%m%d-%H%M%S')
 TARGET_ARCH := x86_64
 
-TARGET_PROJECT_CFLAGS := -g -Wall -DPROJECT=$(PROJECT) -DTARGET_ARCH_$(TARGET_ARCH)=1
+TARGET_PROJECT_CFLAGS := -g -Wall -Werror -DPROJECT=$(PROJECT) -DTARGET_ARCH_$(TARGET_ARCH)=1
 TARGET_PROJECT_LDFLAGS :=
 
 ifeq ($(ASAN), 1)
@@ -21,7 +21,7 @@ TARGET_PROJECT_LDFLAGS +=
 endif
 
 TARGET_CFLAGS = $(TARGET_PROJECT_CFLAGS) -Wstrict-prototypes -MT $@ -MMD -MP -MF $@.d
-TARGET_CXXFLAGS = $(TARGET_PROJECT_CFLAGS) -std=c++11 -MT $@ -MMD -MP -MF $@.d
+TARGET_CXXFLAGS = $(TARGET_PROJECT_CFLAGS) -Wmissing-declarations -std=c++11 -MT $@ -MMD -MP -MF $@.d
 TARGET_LDFLAGS = $(TARGET_PROJECT_LDFLAGS)
 TARGET_CC = gcc
 TARGET_CXX = g++
