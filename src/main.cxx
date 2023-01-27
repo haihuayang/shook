@@ -738,7 +738,7 @@ restart_tracee:
 	} else if ((tcb.flags & FLAG_SUSPEND) == 0) {
 		/* Enter next system call */
 		if (ptrace(PTRACE_SYSCALL, pid, 0, tcb.restart_signo) == -1)
-			FATAL("%s", strerror(errno));
+			WARN("Unexpect pid=%d %s", pid, strerror(errno));
 	}
 }
 
