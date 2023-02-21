@@ -140,6 +140,7 @@ struct gstate_t
 	bool enable_vdso = false;
 	bool aborted = false;
 	bool exiting = false;
+	bool term_all_tracee = false;
 	pid_t start_pid = -1;
 	unsigned int exit_code = 0;
 	unsigned int exit_timeout_ms = 5000;
@@ -160,7 +161,7 @@ static int detach(pid_t pid)
 	} else if (it->second.flags & FLAG_DETACHING) {
 		LOG(LOG_WARN, "pid %d is already in detaching", pid);
 	} else {
-		DBG("detaching %d", pid);
+		LOG(LOG_INFO, "detaching %d", pid);
 		auto &tcb = it->second;
 		tcb.flags |= FLAG_DETACHING;
 		int err = ptrace(PTRACE_DETACH, pid, 0, 0);
@@ -181,8 +182,11 @@ static void exit_detach(tcb_t &tcb, int signo)
 {
 	uint32_t flags = tcb.flags & (FLAG_DETACHING | FLAG_CREATED);
 	if (flags == FLAG_CREATED) {
-		LOG(LOG_INFO, "killing %d %d", tcb.pid, signo);
-		kill(tcb.pid, signo);
+		if (tcb.pid == gstate.start_pid || signo != SIGTERM ||
+				gstate.term_all_tracee) {
+			LOG(LOG_INFO, "killing %d %d", tcb.pid, signo);
+			kill(tcb.pid, signo);
+		}
 	} else if (flags == 0) {
 		detach(tcb.pid);
 	}
@@ -1028,6 +1032,8 @@ int main(int argc, char **argv)
 			loglevel = parse_loglevel(NEXT_ARG(argv));
 		} else if (strcmp(*argv, "-exit-timeout") == 0) {
 			gstate.exit_timeout_ms = atoi(NEXT_ARG(argv));
+		} else if (strcmp(*argv, "-term-all-tracee") == 0) {
+			gstate.term_all_tracee = true;
 		} else if (strcmp(*argv, "-p") == 0) {
 			int pid = atoi(NEXT_ARG(argv));
 			if (pid <= 0) {
