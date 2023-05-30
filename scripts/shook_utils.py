@@ -82,10 +82,13 @@ class Epoll(object):
 			return -errno.ENOENT
 
 class TraceeMgmt__:
+	class Process:
+		def __init__(self, pid, fd_table, cwd = None):
+			self.fd_table, self.cwd = fd_table, cwd
+
 	class Tracee:
-		def __init__(self, pid, main_pid, fd_table):
-			self.pid, self.main_pid, self.fd_table = pid, main_pid, fd_table
-			self.cwd = None
+		def __init__(self, pid, proc):
+			self.pid, self.proc = pid, proc
 			self.data = []
 
 	def __init__(self, **kwargs):
@@ -134,23 +137,25 @@ class TraceeMgmt__:
 
 	def attached(self, pid):
 		# not fd table is empty
-		self.tracee_tbl[pid] = self.Tracee(pid, pid, {})
+		self.tracee_tbl[pid] = self.Tracee(pid, self.Process(pid, {}))
 
 	def forked(self, pid_from, pid_to):
-		self.tracee_tbl[pid_to] = self.Tracee(pid_to, pid_to, copy.deepcopy(self.tracee_tbl[pid_from].fd_table))
+		proc = copy.deepcopy(self.tracee_tbl[pid_from].proc)
+		proc.pid = pid_to
+		self.tracee_tbl[pid_to] = self.Tracee(pid_to, proc)
 
 	def cloned(self, pid_from, pid_to):
 		tracee_from = self.tracee_tbl[pid_from]
-		self.tracee_tbl[pid_to] = self.Tracee(pid_to, tracee_from.main_pid, tracee_from.fd_table)
+		self.tracee_tbl[pid_to] = self.Tracee(pid_to, tracee_from.proc)
 		
 	def get_main_pid(self, pid):
-		return self.tracee_tbl[pid].main_pid
+		return self.tracee_tbl[pid].proc.pid
 
 	def set_cwd(self, pid, path):
-		self.tracee_tbl[pid].cwd = path
+		self.tracee_tbl[pid].proc.cwd = path
 
 	def get_cwd(self, pid):
-		return self.tracee_tbl[pid].cwd
+		return self.tracee_tbl[pid].proc.cwd
 
 	def push(self, pid, *data):
 		self.tracee_tbl[pid].data.append(data)
@@ -158,15 +163,18 @@ class TraceeMgmt__:
 	def pop(self, pid):
 		return self.tracee_tbl[pid].data.pop()
 
+	def get_fd_table(self, pid):
+		return self.tracee_tbl[pid].proc.fd_table
+
 	# flags, fdobj and userdata, among them, fd and userdata shared by dup fd
 	def get_fd(self, pid, fd):
 		try:
-			return self.tracee_tbl[pid].fd_table[fd]
+			return self.get_fd_table(pid)[fd]
 		except:
 			return 0, None, None
 		
 	def put_fd_obj(self, pid, fd, t):
-		fd_table = self.tracee_tbl[pid].fd_table
+		fd_table = self.get_fd_table(pid)
 		if fd in fd_table:
 			fd_table[fd][1] = t
 		else:
@@ -179,7 +187,7 @@ class TraceeMgmt__:
 	O_NONBLOCKING = 0x800
 	O_CLOEXEC = 0x80000
 	def mod_fd_flags(self, pid, fd, flags, enable):
-		fd_table = self.tracee_tbl[pid].fd_table
+		fd_table = self.get_fd_table(pid)
 		if fd in fd_table:
 			if enable:
 				fd_table[fd][0] |= flags
@@ -192,24 +200,24 @@ class TraceeMgmt__:
 				fd_table[fd] = [0, None, None]
 
 	def set_fd_userdata(self, pid, fd, userdata):
-		fd_table = self.tracee_tbl[pid].fd_table
+		fd_table = self.get_fd_table(pid)
 		try:
 			fd_table[fd][2] = userdata
 		except KeyError:
 			fd_table[fd] = [0, None, userdata]
 
 	def get_fd_userdata(self, pid, fd):
-		fd_table = self.tracee_tbl[pid].fd_table
+		fd_table = self.get_fd_table(pid)
 		return fd_table[fd][2]
 	
 	def close_fd(self, pid, fd):
 		try:
-			del self.tracee_tbl[pid].fd_table[fd]
+			del self.get_fd_table(pid)[fd]
 		except:
 			pass
 	
 	def dup_fd(self, pid, fd_src, fd_dst, flags = 0):
-		fd_table = self.tracee_tbl[pid].fd_table
+		fd_table = self.get_fd_table(pid)
 		try:
 			_, fd_obj, userdata = self.get_fd(pid, fd_src)
 			fd_table[fd_dst] = [flags, fd_obj, userdata]
@@ -254,11 +262,11 @@ class TraceeMgmt__:
 				# remove all fd with F_CLOEXEC after execve succeed
 				new_fd_tbl = { }
 				tracee = self.tracee_tbl[pid]
-				for fd, fd_data in tracee.fd_table.items():
+				for fd, fd_data in tracee.proc.fd_table.items():
 					flags, fd_obj, user_data = fd_data
 					if (flags & self.F_CLOEXEC) == 0:
 						new_fd_tbl[fd] = [flags, fd_obj, user_data]
-				tracee.fd_table = new_fd_tbl
+				tracee.proc = self.Process(pid, new_fd_tbl, tracee.proc.cwd)
 				
 		elif scno == shook.SYS_ioctl:
 			fd, op, val = args
